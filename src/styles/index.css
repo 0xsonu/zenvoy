@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --zen-bg: #ffffff;
+  --zen-fg: #1a1a1a;
+  --zen-border: #e5e5e5;
+  --zen-accent: #4a6ae8;
+  --zen-accent-fg: #ffffff;
+  --zen-muted: #f5f5f5;
+  --zen-muted-fg: #666666;
+  --zen-subtle: #fafafa;
+  --zen-sidebar: #f8f8f8;
+  --zen-sidebar-fg: #333333;
+  --zen-sidebar-border: #e0e0e0;
+  --zen-font-mono: 'SF Mono', 'Fira Code', monospace;
+  --zen-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.dark {
+  --zen-bg: #1a1a1a;
+  --zen-fg: #e5e5e5;
+  --zen-border: #333333;
+  --zen-accent: #6b8af5;
+  --zen-accent-fg: #ffffff;
+  --zen-muted: #222222;
+  --zen-muted-fg: #999999;
+  --zen-subtle: #1f1f1f;
+  --zen-sidebar: #151515;
+  --zen-sidebar-fg: #cccccc;
+  --zen-sidebar-border: #2a2a2a;
+}
+
+body {
+  margin: 0;
+  font-family: var(--zen-font-sans);
+  background: var(--zen-bg);
+  color: var(--zen-fg);
+}
