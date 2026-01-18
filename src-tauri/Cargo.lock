@@ -3433,6 +3433,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-opener",
  "tauri-plugin-process",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tower 0.4.13",
