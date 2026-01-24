@@ -214,6 +214,124 @@ impl Vault {
         let mut cache = self.meta_cache.write();
         cache.clear();
     }
+
+    pub fn list_notes(&self) -> VaultResult<Vec<NoteMeta>> {
+        let settings = self.get_settings()?;
+        let folders = [NoteFolder::Inbox, NoteFolder::Quick, NoteFolder::Archive, NoteFolder::Trash];
+        let mut all = Vec::new();
+
+        for folder in &folders {
+            let base = self.folder_root(folder)?;
+            if !base.is_dir() {
+                continue;
+            }
+            let is_root_inbox = *folder == NoteFolder::Inbox && settings.primary_notes_location == "root";
+            let mut dir_indices: HashMap<PathBuf, i32> = HashMap::new();
+
+            self.walk_dir(&base, folder, is_root_inbox, &mut dir_indices, &mut all)?;
+        }
+        Ok(all)
+    }
+
+    fn walk_dir(
+        &self,
+        dir: &Path,
+        folder: &NoteFolder,
+        skip_reserved: bool,
+        dir_indices: &mut HashMap<PathBuf, i32>,
+        out: &mut Vec<NoteMeta>,
+    ) -> VaultResult<()> {
+        let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
+        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                if skip_reserved && RESERVED_ROOT_NAMES.contains(&name.as_str()) {
+                    continue;
+                }
+                self.walk_dir(&path, folder, false, dir_indices, out)?;
+            } else if name.to_lowercase().ends_with(".md") {
+                let idx = dir_indices.entry(dir.to_path_buf()).or_insert(0);
+                let sibling_order = *idx;
+                *idx += 1;
+                let mut meta = self.read_meta(folder, &path)?;
+                meta.sibling_order = sibling_order;
+                out.push(meta);
+            }
+        }
+        Ok(())
+    }
+
+    fn read_meta(&self, folder: &NoteFolder, abs_path: &Path) -> VaultResult<NoteMeta> {
+        let key = abs_path.to_string_lossy().to_string();
+        let fs_meta = fs::metadata(abs_path)?;
+        let mtime_ms = fs_meta.modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64() * 1000.0;
+
+        {
+            let cache = self.meta_cache.read();
+            if let Some(entry) = cache.get(&key) {
+                if (entry.mtime_ms - mtime_ms).abs() < 1.0 {
+                    return Ok(entry.meta.clone());
+                }
+            }
+        }
+
+        let body = fs::read_to_string(abs_path)?;
+        let stem = abs_path.file_stem().unwrap_or_default().to_string_lossy();
+        let title = parse::extract_title(&body, &stem);
+        let tags = parse::extract_tags(&body);
+        let wikilinks = parse::extract_wikilinks(&body);
+        let has_attachments = parse::body_has_local_asset(&body);
+        let excerpt = parse::build_excerpt(&body);
+        let size = fs_meta.len() as i64;
+
+        let updated_at = (mtime_ms / 1000.0) as i64;
+        let created_at = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let ct = fs_meta.ctime();
+                if ct > 0 { ct } else { updated_at }
+            }
+            #[cfg(not(unix))]
+            { updated_at }
+        };
+
+        let rel = abs_path.strip_prefix(&self.root).unwrap_or(abs_path);
+        let path = rel.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("/");
+
+        let meta = NoteMeta {
+            path,
+            title,
+            folder: folder.clone(),
+            sibling_order: 0,
+            created_at,
+            updated_at,
+            size,
+            tags,
+            wikilinks,
+            has_attachments,
+            excerpt,
+        };
+
+        {
+            let mut cache = self.meta_cache.write();
+            cache.insert(key, NoteMetaCacheEntry { mtime_ms, _size: size, meta: meta.clone() });
+        }
+        Ok(meta)
+    }
 }
 
 fn normalize_vault_settings(mut settings: VaultSettings, fallback_primary: &str) -> VaultSettings {
@@ -386,5 +504,25 @@ mod tests {
         assert!(!result.contains_key("inbox:projects"));
         assert!(!result.contains_key("inbox:projects/sub"));
         assert_eq!(result.get("inbox:other").unwrap(), "book");
+    }
+
+    #[test]
+    fn test_list_notes_finds_notes() {
+        let (_dir, vault) = test_vault();
+        let notes = vault.list_notes().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].title, "Welcome to Zenvoy");
+        assert_eq!(notes[0].folder, NoteFolder::Inbox);
+    }
+
+    #[test]
+    fn test_list_notes_extracts_metadata() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(vault.root().join("inbox").join("Tagged.md"), "# Tagged Note\n\nHello #rust #programming\n\nSee [[Other Note]]\n").unwrap();
+        let notes = vault.list_notes().unwrap();
+        let tagged = notes.iter().find(|n| n.title == "Tagged Note").unwrap();
+        assert!(tagged.tags.contains(&"rust".to_string()));
+        assert!(tagged.tags.contains(&"programming".to_string()));
+        assert!(tagged.wikilinks.contains(&"Other Note".to_string()));
     }
 }
