@@ -267,6 +267,117 @@ impl Vault {
         Ok(())
     }
 
+    pub fn read_note(&self, rel: &str) -> VaultResult<NoteContent> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let body = fs::read_to_string(&abs)?;
+        let folder = self.folder_of(&abs);
+        let meta = self.read_meta(&folder, &abs)?;
+        Ok(NoteContent { meta, body })
+    }
+
+    pub fn write_note(&self, rel: &str, body: &str) -> VaultResult<NoteMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&abs, body)?;
+        self.invalidate_caches();
+        let folder = self.folder_of(&abs);
+        let mut meta = self.read_meta(&folder, &abs)?;
+        // Use filename stem as title for write_note
+        meta.title = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        Ok(meta)
+    }
+
+    pub fn create_note(&self, folder: &NoteFolder, title: Option<&str>, subpath: Option<&str>) -> VaultResult<NoteMeta> {
+        let stem = match title {
+            Some(t) => {
+                let s = sanitize_file_stem(t);
+                if s.is_empty() { default_title() } else { s }
+            }
+            None => default_title(),
+        };
+        let base = self.folder_root(folder)?;
+        let dir = match subpath {
+            Some(sp) if !sp.is_empty() => base.join(sp),
+            _ => base,
+        };
+        fs::create_dir_all(&dir)?;
+        let path = unique_path(&dir, &stem, "md");
+        fs::write(&path, "")?;
+        self.invalidate_caches();
+        self.read_meta(folder, &path)
+    }
+
+    pub fn rename_note(&self, rel: &str, next_title: &str) -> VaultResult<NoteMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let stem = sanitize_file_stem(next_title);
+        let stem = if stem.is_empty() { default_title() } else { stem };
+        let dir = abs.parent().unwrap();
+        let dest = unique_path(dir, &stem, "md");
+        fs::rename(&abs, &dest)?;
+        self.invalidate_caches();
+        let folder = self.folder_of(&dest);
+        let mut meta = self.read_meta(&folder, &dest)?;
+        // Use the intended title (from filename stem) rather than body heading
+        meta.title = dest.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        Ok(meta)
+    }
+
+    pub fn delete_note(&self, rel: &str) -> VaultResult<()> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        fs::remove_file(&abs)?;
+        self.invalidate_caches();
+        Ok(())
+    }
+
+    pub fn duplicate_note(&self, rel: &str) -> VaultResult<NoteMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let stem = abs.file_stem().unwrap_or_default().to_string_lossy();
+        let copy_stem = format!("{} copy", stem);
+        let dir = abs.parent().unwrap();
+        let dest = unique_path(dir, &copy_stem, "md");
+        copy_file(&abs, &dest)?;
+        self.invalidate_caches();
+        let folder = self.folder_of(&dest);
+        self.read_meta(&folder, &dest)
+    }
+
+    pub fn append_to_note(&self, rel: &str, body: &str, position: &str) -> VaultResult<NoteMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let existing = fs::read_to_string(&abs)?;
+        let combined = if position == "prepend" {
+            format!("{}\n{}", body, existing)
+        } else {
+            format!("{}\n{}", existing, body)
+        };
+        fs::write(&abs, combined)?;
+        self.invalidate_caches();
+        let folder = self.folder_of(&abs);
+        self.read_meta(&folder, &abs)
+    }
+
+    fn folder_of(&self, abs: &Path) -> NoteFolder {
+        let rel = abs.strip_prefix(&self.root).unwrap_or(abs);
+        let rel_str = rel.to_string_lossy();
+        safepath::folder_for_relative_path(&rel_str).unwrap_or(NoteFolder::Inbox)
+    }
+
     fn read_meta(&self, folder: &NoteFolder, abs_path: &Path) -> VaultResult<NoteMeta> {
         let key = abs_path.to_string_lossy().to_string();
         let fs_meta = fs::metadata(abs_path)?;
@@ -332,6 +443,67 @@ impl Vault {
         }
         Ok(meta)
     }
+}
+
+fn sanitize_file_stem(title: &str) -> String {
+    title.chars().filter(|c| !"/\\:*?\"<>|".contains(*c)).collect::<String>().trim().to_string()
+}
+
+fn default_title() -> String {
+    use std::time::SystemTime;
+    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let dt = chrono_lite(secs);
+    format!("Untitled-{}", dt)
+}
+
+fn chrono_lite(epoch: u64) -> String {
+    let days = epoch / 86400;
+    let time_of_day = epoch % 86400;
+    let h = time_of_day / 3600;
+    let m = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+    // Simple date calculation
+    let mut y = 1970i64;
+    let mut remaining = days as i64;
+    loop {
+        let days_in_year = if is_leap(y) { 366 } else { 365 };
+        if remaining < days_in_year { break; }
+        remaining -= days_in_year;
+        y += 1;
+    }
+    let months_days: [i64; 12] = if is_leap(y) {
+        [31,29,31,30,31,30,31,31,30,31,30,31]
+    } else {
+        [31,28,31,30,31,30,31,31,30,31,30,31]
+    };
+    let mut mon = 1;
+    for md in months_days {
+        if remaining < md { break; }
+        remaining -= md;
+        mon += 1;
+    }
+    let day = remaining + 1;
+    format!("{:04}-{:02}-{:02}-{:02}{:02}{:02}", y, mon, day, h, m, s)
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let candidate = dir.join(format!("{}.{}", stem, ext));
+    if !candidate.exists() { return candidate; }
+    let mut i = 2;
+    loop {
+        let p = dir.join(format!("{} {}.{}", stem, i, ext));
+        if !p.exists() { return p; }
+        i += 1;
+    }
+}
+
+fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::copy(src, dst)?;
+    Ok(())
 }
 
 fn normalize_vault_settings(mut settings: VaultSettings, fallback_primary: &str) -> VaultSettings {
@@ -524,5 +696,63 @@ mod tests {
         assert!(tagged.tags.contains(&"rust".to_string()));
         assert!(tagged.tags.contains(&"programming".to_string()));
         assert!(tagged.wikilinks.contains(&"Other Note".to_string()));
+    }
+
+    #[test]
+    fn test_read_note() {
+        let (_dir, vault) = test_vault();
+        let content = vault.read_note("inbox/Welcome.md").unwrap();
+        assert!(content.body.contains("Welcome"));
+        assert_eq!(content.meta.title, "Welcome to Zenvoy");
+    }
+
+    #[test]
+    fn test_write_note() {
+        let (_dir, vault) = test_vault();
+        let meta = vault.write_note("inbox/Welcome.md", "# Updated\n\nNew body").unwrap();
+        assert_eq!(meta.title, "Welcome");
+        let content = vault.read_note("inbox/Welcome.md").unwrap();
+        assert!(content.body.contains("New body"));
+    }
+
+    #[test]
+    fn test_create_note() {
+        let (_dir, vault) = test_vault();
+        let meta = vault.create_note(&NoteFolder::Inbox, Some("My Note"), None).unwrap();
+        assert_eq!(meta.title, "My Note");
+        assert!(meta.path.starts_with("inbox/"));
+        assert!(meta.path.ends_with(".md"));
+    }
+
+    #[test]
+    fn test_create_note_deduplicates() {
+        let (_dir, vault) = test_vault();
+        vault.create_note(&NoteFolder::Inbox, Some("Test"), None).unwrap();
+        let meta2 = vault.create_note(&NoteFolder::Inbox, Some("Test"), None).unwrap();
+        assert!(meta2.path.contains("Test 2"));
+    }
+
+    #[test]
+    fn test_rename_note() {
+        let (_dir, vault) = test_vault();
+        let meta = vault.rename_note("inbox/Welcome.md", "Hello World").unwrap();
+        assert_eq!(meta.title, "Hello World");
+        assert!(vault.read_note("inbox/Hello World.md").is_ok());
+        assert!(vault.read_note("inbox/Welcome.md").is_err());
+    }
+
+    #[test]
+    fn test_delete_note() {
+        let (_dir, vault) = test_vault();
+        vault.delete_note("inbox/Welcome.md").unwrap();
+        assert!(vault.read_note("inbox/Welcome.md").is_err());
+    }
+
+    #[test]
+    fn test_duplicate_note() {
+        let (_dir, vault) = test_vault();
+        let dup = vault.duplicate_note("inbox/Welcome.md").unwrap();
+        assert!(dup.path.contains("copy"));
+        assert!(vault.read_note(&dup.path).is_ok());
     }
 }
