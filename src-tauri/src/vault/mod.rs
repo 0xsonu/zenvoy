@@ -372,6 +372,87 @@ impl Vault {
         self.read_meta(&folder, &abs)
     }
 
+    pub fn move_to_trash(&self, rel: &str) -> VaultResult<NoteMeta> {
+        self.move_between_folders(rel, &NoteFolder::Trash)
+    }
+
+    pub fn restore_from_trash(&self, rel: &str) -> VaultResult<NoteMeta> {
+        self.move_between_folders(rel, &NoteFolder::Inbox)
+    }
+
+    pub fn empty_trash(&self) -> VaultResult<()> {
+        let trash = self.root.join("trash");
+        if trash.is_dir() {
+            for entry in fs::read_dir(&trash)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    fs::remove_dir_all(&path)?;
+                } else {
+                    fs::remove_file(&path)?;
+                }
+            }
+        }
+        self.invalidate_caches();
+        Ok(())
+    }
+
+    pub fn archive_note(&self, rel: &str) -> VaultResult<NoteMeta> {
+        self.move_between_folders(rel, &NoteFolder::Archive)
+    }
+
+    pub fn unarchive_note(&self, rel: &str) -> VaultResult<NoteMeta> {
+        self.move_between_folders(rel, &NoteFolder::Inbox)
+    }
+
+    pub fn move_note(&self, rel: &str, target: &NoteFolder, target_subpath: Option<&str>) -> VaultResult<NoteMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let stem = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let target_root = self.folder_root(target)?;
+        let dest_dir = match target_subpath {
+            Some(sp) if !sp.is_empty() => target_root.join(sp),
+            _ => target_root,
+        };
+        fs::create_dir_all(&dest_dir)?;
+        let dest = unique_path(&dest_dir, &stem, "md");
+        fs::rename(&abs, &dest)?;
+        self.invalidate_caches();
+        self.read_meta(target, &dest)
+    }
+
+    fn move_between_folders(&self, rel: &str, target: &NoteFolder) -> VaultResult<NoteMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let stem = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let subpath = self.folder_subpath_of(&abs);
+        let target_root = self.folder_root(target)?;
+        let dest_dir = if subpath.is_empty() {
+            target_root
+        } else {
+            target_root.join(&subpath)
+        };
+        fs::create_dir_all(&dest_dir)?;
+        let dest = unique_path(&dest_dir, &stem, "md");
+        fs::rename(&abs, &dest)?;
+        self.invalidate_caches();
+        self.read_meta(target, &dest)
+    }
+
+    fn folder_subpath_of(&self, abs: &Path) -> String {
+        let rel = abs.strip_prefix(&self.root).unwrap_or(abs);
+        let components: Vec<_> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+        // components: [folder, ...subpath..., filename]
+        if components.len() <= 2 {
+            return String::new();
+        }
+        // Skip first (folder name) and last (filename)
+        components[1..components.len() - 1].join("/")
+    }
+
     fn folder_of(&self, abs: &Path) -> NoteFolder {
         let rel = abs.strip_prefix(&self.root).unwrap_or(abs);
         let rel_str = rel.to_string_lossy();
@@ -754,5 +835,59 @@ mod tests {
         let dup = vault.duplicate_note("inbox/Welcome.md").unwrap();
         assert!(dup.path.contains("copy"));
         assert!(vault.read_note(&dup.path).is_ok());
+    }
+
+    #[test]
+    fn test_move_to_trash() {
+        let (_dir, vault) = test_vault();
+        let meta = vault.move_to_trash("inbox/Welcome.md").unwrap();
+        assert_eq!(meta.folder, NoteFolder::Trash);
+        assert!(meta.path.starts_with("trash/"));
+        assert!(vault.read_note("inbox/Welcome.md").is_err());
+    }
+
+    #[test]
+    fn test_restore_from_trash() {
+        let (_dir, vault) = test_vault();
+        let trashed = vault.move_to_trash("inbox/Welcome.md").unwrap();
+        let restored = vault.restore_from_trash(&trashed.path).unwrap();
+        assert_eq!(restored.folder, NoteFolder::Inbox);
+        assert!(restored.path.starts_with("inbox/"));
+    }
+
+    #[test]
+    fn test_empty_trash() {
+        let (_dir, vault) = test_vault();
+        vault.move_to_trash("inbox/Welcome.md").unwrap();
+        vault.empty_trash().unwrap();
+        let notes = vault.list_notes().unwrap();
+        assert!(notes.iter().all(|n| n.folder != NoteFolder::Trash));
+    }
+
+    #[test]
+    fn test_archive_note() {
+        let (_dir, vault) = test_vault();
+        let meta = vault.archive_note("inbox/Welcome.md").unwrap();
+        assert_eq!(meta.folder, NoteFolder::Archive);
+        assert!(meta.path.starts_with("archive/"));
+    }
+
+    #[test]
+    fn test_unarchive_note() {
+        let (_dir, vault) = test_vault();
+        let archived = vault.archive_note("inbox/Welcome.md").unwrap();
+        let restored = vault.unarchive_note(&archived.path).unwrap();
+        assert_eq!(restored.folder, NoteFolder::Inbox);
+    }
+
+    #[test]
+    fn test_move_preserves_subpath() {
+        let (_dir, vault) = test_vault();
+        std::fs::create_dir_all(vault.root().join("inbox").join("projects")).unwrap();
+        std::fs::write(vault.root().join("inbox").join("projects").join("deep.md"), "# Deep\n").unwrap();
+        let trashed = vault.move_to_trash("inbox/projects/deep.md").unwrap();
+        assert!(trashed.path.contains("projects"));
+        let restored = vault.restore_from_trash(&trashed.path).unwrap();
+        assert!(restored.path.contains("projects"));
     }
 }
