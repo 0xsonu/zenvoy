@@ -524,6 +524,113 @@ impl Vault {
         }
         Ok(meta)
     }
+
+    pub fn list_folders(&self) -> VaultResult<Vec<FolderEntry>> {
+        let settings = self.get_settings()?;
+        let folders = [NoteFolder::Inbox, NoteFolder::Quick, NoteFolder::Archive, NoteFolder::Trash];
+        let mut result: Vec<FolderEntry> = Vec::new();
+
+        for folder in &folders {
+            let base = self.folder_root(folder)?;
+            if !base.is_dir() { continue; }
+            let is_root_inbox = *folder == NoteFolder::Inbox && settings.primary_notes_location == "root";
+            self.walk_folders(&base, &base, folder, is_root_inbox, &mut result)?;
+        }
+
+        // Sort by folder then subpath
+        result.sort_by(|a, b| {
+            a.folder.as_str().cmp(b.folder.as_str()).then(a.subpath.cmp(&b.subpath))
+        });
+
+        // Assign sibling_order per parent directory within each folder
+        let mut parent_counts: HashMap<(String, String), i32> = HashMap::new();
+        for entry in &mut result {
+            let parent = if let Some(pos) = entry.subpath.rfind('/') {
+                entry.subpath[..pos].to_string()
+            } else {
+                String::new()
+            };
+            let key = (entry.folder.as_str().to_string(), parent);
+            let count = parent_counts.entry(key).or_insert(0);
+            entry.sibling_order = *count;
+            *count += 1;
+        }
+
+        Ok(result)
+    }
+
+    fn walk_folders(
+        &self,
+        base: &Path,
+        dir: &Path,
+        folder: &NoteFolder,
+        skip_reserved: bool,
+        out: &mut Vec<FolderEntry>,
+    ) -> VaultResult<()> {
+        let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
+        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue; }
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            if skip_reserved && RESERVED_ROOT_NAMES.contains(&name.as_str()) { continue; }
+            let subpath = path.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+            out.push(FolderEntry {
+                folder: folder.clone(),
+                subpath,
+                sibling_order: 0,
+            });
+            self.walk_folders(base, &path, folder, false, out)?;
+        }
+        Ok(())
+    }
+
+    pub fn create_folder(&self, folder: &NoteFolder, subpath: &str) -> VaultResult<()> {
+        let base = self.folder_root(folder)?;
+        let target = safepath::safe_join(&base, subpath)?;
+        fs::create_dir_all(&target)?;
+        Ok(())
+    }
+
+    pub fn rename_folder(&self, folder: &NoteFolder, old_subpath: &str, new_subpath: &str) -> VaultResult<String> {
+        let base = self.folder_root(folder)?;
+        let old_path = safepath::safe_join(&base, old_subpath)?;
+        let new_path = safepath::safe_join(&base, new_subpath)?;
+        if let Some(parent) = new_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(&old_path, &new_path)?;
+        // Update folder icons
+        let mut settings = self.get_settings()?;
+        settings.folder_icons = rewrite_folder_icons_for_rename(&settings.folder_icons, folder, old_subpath, new_subpath);
+        self.set_settings(settings)?;
+        Ok(new_subpath.to_string())
+    }
+
+    pub fn delete_folder(&self, folder: &NoteFolder, subpath: &str) -> VaultResult<()> {
+        let base = self.folder_root(folder)?;
+        let target = safepath::safe_join(&base, subpath)?;
+        fs::remove_dir_all(&target)?;
+        // Update folder icons
+        let mut settings = self.get_settings()?;
+        settings.folder_icons = remove_folder_icons(&settings.folder_icons, folder, subpath);
+        self.set_settings(settings)?;
+        Ok(())
+    }
+
+    pub fn duplicate_folder(&self, folder: &NoteFolder, subpath: &str) -> VaultResult<String> {
+        let base = self.folder_root(folder)?;
+        let src = safepath::safe_join(&base, subpath)?;
+        let original_name = src.file_name().unwrap().to_string_lossy().to_string();
+        let copy_name = format!("{} copy", original_name);
+        let parent = src.parent().unwrap();
+        let dest = unique_dir(parent, &copy_name);
+        copy_dir(&src, &dest)?;
+        let new_subpath = dest.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/");
+        Ok(new_subpath)
+    }
 }
 
 fn sanitize_file_stem(title: &str) -> String {
@@ -584,6 +691,31 @@ fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
 
 fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::copy(src, dst)?;
+    Ok(())
+}
+
+fn unique_dir(parent: &Path, base: &str) -> PathBuf {
+    let candidate = parent.join(base);
+    if !candidate.exists() { return candidate; }
+    let mut i = 2;
+    loop {
+        let p = parent.join(format!("{} {}", base, i));
+        if !p.exists() { return p; }
+        i += 1;
+    }
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let dest_path = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &dest_path)?;
+        } else {
+            fs::copy(entry.path(), &dest_path)?;
+        }
+    }
     Ok(())
 }
 
@@ -889,5 +1021,54 @@ mod tests {
         assert!(trashed.path.contains("projects"));
         let restored = vault.restore_from_trash(&trashed.path).unwrap();
         assert!(restored.path.contains("projects"));
+    }
+
+    #[test]
+    fn test_list_folders() {
+        let (_dir, vault) = test_vault();
+        std::fs::create_dir_all(vault.root().join("inbox").join("projects")).unwrap();
+        std::fs::create_dir_all(vault.root().join("inbox").join("projects").join("sub")).unwrap();
+        let folders = vault.list_folders().unwrap();
+        assert!(folders.iter().any(|f| f.subpath == "projects" && f.folder == NoteFolder::Inbox));
+        assert!(folders.iter().any(|f| f.subpath == "projects/sub" && f.folder == NoteFolder::Inbox));
+    }
+
+    #[test]
+    fn test_create_folder() {
+        let (_dir, vault) = test_vault();
+        vault.create_folder(&NoteFolder::Inbox, "new-folder").unwrap();
+        let folders = vault.list_folders().unwrap();
+        assert!(folders.iter().any(|f| f.subpath == "new-folder"));
+    }
+
+    #[test]
+    fn test_rename_folder() {
+        let (_dir, vault) = test_vault();
+        vault.create_folder(&NoteFolder::Inbox, "old-name").unwrap();
+        let new_sub = vault.rename_folder(&NoteFolder::Inbox, "old-name", "new-name").unwrap();
+        assert_eq!(new_sub, "new-name");
+        let folders = vault.list_folders().unwrap();
+        assert!(!folders.iter().any(|f| f.subpath == "old-name"));
+        assert!(folders.iter().any(|f| f.subpath == "new-name"));
+    }
+
+    #[test]
+    fn test_delete_folder() {
+        let (_dir, vault) = test_vault();
+        vault.create_folder(&NoteFolder::Inbox, "doomed").unwrap();
+        vault.delete_folder(&NoteFolder::Inbox, "doomed").unwrap();
+        let folders = vault.list_folders().unwrap();
+        assert!(!folders.iter().any(|f| f.subpath == "doomed"));
+    }
+
+    #[test]
+    fn test_duplicate_folder() {
+        let (_dir, vault) = test_vault();
+        vault.create_folder(&NoteFolder::Inbox, "original").unwrap();
+        std::fs::write(vault.root().join("inbox").join("original").join("note.md"), "# Hi\n").unwrap();
+        let new_sub = vault.duplicate_folder(&NoteFolder::Inbox, "original").unwrap();
+        assert!(new_sub.contains("copy"));
+        let folders = vault.list_folders().unwrap();
+        assert!(folders.iter().any(|f| f.subpath == new_sub));
     }
 }
