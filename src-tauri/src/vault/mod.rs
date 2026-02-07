@@ -631,6 +631,162 @@ impl Vault {
         let new_subpath = dest.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/");
         Ok(new_subpath)
     }
+
+    // --- Asset management ---
+
+    pub fn has_assets_dir(&self) -> bool {
+        self.root.join("attachements").is_dir() || self.root.join("_assets").is_dir()
+    }
+
+    pub fn list_assets(&self) -> VaultResult<Vec<AssetMeta>> {
+        let mut assets = Vec::new();
+        for dir_name in &["attachements", "_assets"] {
+            let dir = self.root.join(dir_name);
+            if dir.is_dir() {
+                self.walk_assets(&dir, &mut assets)?;
+            }
+        }
+        assets.sort_by(|a: &AssetMeta, b: &AssetMeta| b.updated_at.cmp(&a.updated_at));
+        Ok(assets)
+    }
+
+    fn walk_assets(&self, dir: &Path, out: &mut Vec<AssetMeta>) -> VaultResult<()> {
+        let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
+        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        let mut idx = 0i32;
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                self.walk_assets(&path, out)?;
+            } else {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.to_lowercase().ends_with(".md") { continue; }
+                let ext = path.extension().unwrap_or_default().to_string_lossy().to_string();
+                let rel = path.strip_prefix(&self.root).unwrap();
+                let rel_str = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+                let m = fs::metadata(&path)?;
+                let mtime_ms = m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                out.push(AssetMeta {
+                    path: rel_str,
+                    name,
+                    kind: kind_for_ext(&ext).to_string(),
+                    sibling_order: idx,
+                    size: m.len() as i64,
+                    updated_at: mtime_ms,
+                });
+                idx += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn import_files_to_note(&self, _note_path: &str, source_paths: &[String]) -> VaultResult<Vec<ImportedAsset>> {
+        let dest_dir = self.root.join("attachements");
+        fs::create_dir_all(&dest_dir)?;
+        let mut results = Vec::new();
+        for src in source_paths {
+            let src_path = Path::new(src);
+            let m = fs::metadata(src_path)?;
+            if m.len() as i64 > self.max_asset_bytes {
+                return Err(VaultError::AssetTooLarge);
+            }
+            let original_name = src_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let stem = src_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let ext = src_path.extension().unwrap_or_default().to_string_lossy().to_string();
+            let dest = if ext.is_empty() {
+                unique_path(&dest_dir, &stem, "bin")
+            } else {
+                unique_path(&dest_dir, &stem, &ext)
+            };
+            fs::copy(src_path, &dest)?;
+            let dest_name = dest.file_name().unwrap().to_string_lossy().to_string();
+            let kind = kind_for_ext(&ext);
+            let markdown = if kind == "image" {
+                format!("![{}](../attachements/{})", original_name, dest_name)
+            } else {
+                format!("[{}](../attachements/{})", original_name, dest_name)
+            };
+            let rel = dest.strip_prefix(&self.root).unwrap();
+            let rel_str = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+            results.push(ImportedAsset {
+                name: dest_name,
+                path: rel_str,
+                markdown,
+                kind: kind.to_string(),
+            });
+        }
+        Ok(results)
+    }
+
+    pub fn rename_asset(&self, rel: &str, next_name: &str) -> VaultResult<AssetMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let dest = abs.parent().unwrap().join(next_name);
+        fs::rename(&abs, &dest)?;
+        self.asset_meta(&dest)
+    }
+
+    pub fn move_asset(&self, rel: &str, target_dir: &str) -> VaultResult<AssetMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let dest_dir = safepath::safe_join(&self.root, target_dir)?;
+        fs::create_dir_all(&dest_dir)?;
+        let dest = dest_dir.join(abs.file_name().unwrap());
+        fs::rename(&abs, &dest)?;
+        self.asset_meta(&dest)
+    }
+
+    pub fn duplicate_asset(&self, rel: &str) -> VaultResult<AssetMeta> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let stem = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let ext = abs.extension().unwrap_or_default().to_string_lossy().to_string();
+        let copy_stem = format!("{} copy", stem);
+        let dest = unique_path(abs.parent().unwrap(), &copy_stem, &ext);
+        fs::copy(&abs, &dest)?;
+        self.asset_meta(&dest)
+    }
+
+    pub fn delete_asset(&self, rel: &str) -> VaultResult<DeletedAsset> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let data = fs::read(&abs)?;
+        let name = abs.file_name().unwrap().to_string_lossy().to_string();
+        let ext = abs.extension().unwrap_or_default().to_string_lossy().to_string();
+        let rel_str = abs.strip_prefix(&self.root).unwrap().components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+        fs::remove_file(&abs)?;
+        Ok(DeletedAsset { path: rel_str, name, kind: kind_for_ext(&ext).to_string(), data })
+    }
+
+    pub fn restore_deleted_asset(&self, asset: &DeletedAsset) -> VaultResult<AssetMeta> {
+        let abs = safepath::safe_join(&self.root, &asset.path)?;
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&abs, &asset.data)?;
+        self.asset_meta(&abs)
+    }
+
+    fn asset_meta(&self, abs: &Path) -> VaultResult<AssetMeta> {
+        let m = fs::metadata(abs)?;
+        let name = abs.file_name().unwrap().to_string_lossy().to_string();
+        let ext = abs.extension().unwrap_or_default().to_string_lossy().to_string();
+        let rel = abs.strip_prefix(&self.root).unwrap();
+        let rel_str = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+        let mtime_ms = m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+        Ok(AssetMeta { path: rel_str, name, kind: kind_for_ext(&ext).to_string(), sibling_order: 0, size: m.len() as i64, updated_at: mtime_ms })
+    }
 }
 
 fn sanitize_file_stem(title: &str) -> String {
@@ -788,6 +944,16 @@ pub fn remove_folder_icons(
         .filter(|(key, _)| *key != &exact_key && !key.starts_with(&prefix))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
+}
+
+fn kind_for_ext(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "avif" | "apng" => "image",
+        "pdf" => "pdf",
+        "mp3" | "wav" | "ogg" | "flac" | "m4a" | "aac" => "audio",
+        "mp4" | "mov" | "webm" | "ogv" | "m4v" => "video",
+        _ => "file",
+    }
 }
 
 #[cfg(test)]
@@ -1070,5 +1236,53 @@ mod tests {
         assert!(new_sub.contains("copy"));
         let folders = vault.list_folders().unwrap();
         assert!(folders.iter().any(|f| f.subpath == new_sub));
+    }
+
+    #[test]
+    fn test_has_assets_dir() {
+        let (_dir, vault) = test_vault();
+        assert!(vault.has_assets_dir());
+    }
+
+    #[test]
+    fn test_list_assets_empty() {
+        let (_dir, vault) = test_vault();
+        let assets = vault.list_assets().unwrap();
+        assert!(assets.is_empty());
+    }
+
+    #[test]
+    fn test_import_and_list_assets() {
+        let (dir, vault) = test_vault();
+        // Create a source file to import
+        let src = dir.path().join("photo.png");
+        std::fs::write(&src, b"fake png data").unwrap();
+        let imported = vault.import_files_to_note("inbox/Welcome.md", &[src.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].kind, "image");
+        assert!(imported[0].markdown.contains("![photo.png]"));
+        let assets = vault.list_assets().unwrap();
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].kind, "image");
+    }
+
+    #[test]
+    fn test_rename_asset() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(vault.root().join("attachements").join("test.png"), b"data").unwrap();
+        let meta = vault.rename_asset("attachements/test.png", "renamed.png").unwrap();
+        assert_eq!(meta.name, "renamed.png");
+    }
+
+    #[test]
+    fn test_delete_and_restore_asset() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(vault.root().join("attachements").join("doomed.pdf"), b"pdf data").unwrap();
+        let deleted = vault.delete_asset("attachements/doomed.pdf").unwrap();
+        assert_eq!(deleted.name, "doomed.pdf");
+        assert!(!vault.root().join("attachements").join("doomed.pdf").exists());
+        let restored = vault.restore_deleted_asset(&deleted).unwrap();
+        assert_eq!(restored.name, "doomed.pdf");
+        assert!(vault.root().join("attachements").join("doomed.pdf").exists());
     }
 }
