@@ -634,6 +634,22 @@ impl Vault {
 
     // --- Asset management ---
 
+    pub fn scan_tasks(&self) -> VaultResult<Vec<VaultTask>> {
+        let notes = self.list_notes()?;
+        let mut tasks = Vec::new();
+        for note in &notes {
+            if note.folder == NoteFolder::Trash { continue; }
+            let content = self.read_note(&note.path)?;
+            tasks.extend(parse::parse_tasks(&note.path, &note.title, &note.folder, &content.body));
+        }
+        Ok(tasks)
+    }
+
+    pub fn scan_tasks_for_path(&self, rel: &str) -> VaultResult<Vec<VaultTask>> {
+        let content = self.read_note(rel)?;
+        Ok(parse::parse_tasks(&content.meta.path, &content.meta.title, &content.meta.folder, &content.body))
+    }
+
     pub fn has_assets_dir(&self) -> bool {
         self.root.join("attachements").is_dir() || self.root.join("_assets").is_dir()
     }
@@ -1284,5 +1300,48 @@ mod tests {
         let restored = vault.restore_deleted_asset(&deleted).unwrap();
         assert_eq!(restored.name, "doomed.pdf");
         assert!(vault.root().join("attachements").join("doomed.pdf").exists());
+    }
+
+    #[test]
+    fn test_scan_tasks() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(
+            vault.root().join("inbox").join("Tasks.md"),
+            "# My Tasks\n\n- [ ] Buy groceries due:2024-01-15 !high\n- [x] Clean house @waiting\n- [ ] Read book #reading\n"
+        ).unwrap();
+        let tasks = vault.scan_tasks().unwrap();
+        assert!(tasks.len() >= 3);
+        let buy = tasks.iter().find(|t| t.content.contains("Buy groceries")).unwrap();
+        assert_eq!(buy.due, "2024-01-15");
+        assert_eq!(buy.priority, "high");
+        assert!(!buy.checked);
+        let clean = tasks.iter().find(|t| t.content.contains("Clean house")).unwrap();
+        assert!(clean.checked);
+        assert!(clean.waiting);
+        let read = tasks.iter().find(|t| t.content.contains("Read book")).unwrap();
+        assert!(read.tags.contains(&"reading".to_string()));
+    }
+
+    #[test]
+    fn test_scan_tasks_for_path() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(
+            vault.root().join("inbox").join("Specific.md"),
+            "# Specific\n\n- [ ] Task A\n- [ ] Task B\n"
+        ).unwrap();
+        let tasks = vault.scan_tasks_for_path("inbox/Specific.md").unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].source_path, "inbox/Specific.md");
+    }
+
+    #[test]
+    fn test_scan_tasks_skips_trash() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(
+            vault.root().join("trash").join("Old.md"),
+            "# Old\n\n- [ ] Deleted task\n"
+        ).unwrap();
+        let tasks = vault.scan_tasks().unwrap();
+        assert!(!tasks.iter().any(|t| t.content.contains("Deleted task")));
     }
 }
