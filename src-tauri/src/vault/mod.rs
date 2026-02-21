@@ -313,6 +313,7 @@ impl Vault {
     }
 
     pub fn rename_note(&self, rel: &str, next_title: &str) -> VaultResult<NoteMeta> {
+        let notes_before = self.list_notes()?;
         let abs = safepath::safe_join(&self.root, rel)?;
         if !abs.is_file() {
             return Err(VaultError::NotFound(rel.to_string()));
@@ -327,7 +328,27 @@ impl Vault {
         let mut meta = self.read_meta(&folder, &dest)?;
         // Use the intended title (from filename stem) rather than body heading
         meta.title = dest.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        self.rewrite_inbound_wikilinks(&notes_before, rel, next_title);
         Ok(meta)
+    }
+
+    pub fn rewrite_inbound_wikilinks(&self, notes_before: &[NoteMeta], old_path: &str, new_title: &str) {
+        let notes: Vec<_> = notes_before.iter().filter(|n| n.folder != NoteFolder::Trash).collect();
+        for note in &notes {
+            if note.path == old_path { continue; }
+            let abs = match safepath::safe_join(&self.root, &note.path) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let body = match fs::read_to_string(&abs) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let (new_body, count) = rewrite_wikilinks_for_rename(&body, notes_before, old_path, new_title);
+            if count > 0 {
+                let _ = fs::write(&abs, new_body);
+            }
+        }
     }
 
     pub fn delete_note(&self, rel: &str) -> VaultResult<()> {
@@ -1034,6 +1055,148 @@ pub fn remove_folder_icons(
         .collect()
 }
 
+fn wiki_is_path_like(target: &str) -> bool {
+    target.starts_with('/') || target.contains('/') || target.ends_with(".md")
+}
+
+fn wiki_split_content(content: &str) -> (&str, &str, &str) {
+    // Split into (target, anchor, alias)
+    let (before_pipe, alias) = match content.find('|') {
+        Some(i) => (&content[..i], &content[i + 1..]),
+        None => (content, ""),
+    };
+    let (target, anchor) = match before_pipe.find('#') {
+        Some(i) => (&before_pipe[..i], &before_pipe[i..]),
+        None => match before_pipe.find('^') {
+            Some(i) => (&before_pipe[..i], &before_pipe[i..]),
+            None => (before_pipe, ""),
+        },
+    };
+    (target, anchor, alias)
+}
+
+fn wiki_swap_basename(target: &str, new_title: &str) -> String {
+    if let Some(pos) = target.rfind('/') {
+        format!("{}/{}", &target[..pos], new_title)
+    } else {
+        new_title.to_string()
+    }
+}
+
+fn wiki_code_mask(body: &str) -> Vec<bool> {
+    let bytes = body.as_bytes();
+    let len = bytes.len();
+    let mut mask = vec![false; len];
+    let mut i = 0;
+    while i < len {
+        // Fenced code block
+        if i + 3 <= len && &body[i..i + 3] == "```" {
+            let start = i;
+            // Skip to end of opening fence line
+            i += 3;
+            while i < len && bytes[i] != b'\n' { i += 1; }
+            if i < len { i += 1; }
+            // Find closing ```
+            let mut found_close = false;
+            while i < len {
+                if bytes[i] == b'`' && i + 3 <= len && &body[i..i + 3] == "```" {
+                    // Mark through end of closing fence line
+                    i += 3;
+                    while i < len && bytes[i] != b'\n' { i += 1; }
+                    if i < len { i += 1; }
+                    found_close = true;
+                    break;
+                }
+                i += 1;
+            }
+            if !found_close { i = len; }
+            for j in start..i { mask[j] = true; }
+        }
+        // Inline code
+        else if bytes[i] == b'`' {
+            let start = i;
+            i += 1;
+            while i < len && bytes[i] != b'`' { i += 1; }
+            if i < len { i += 1; }
+            for j in start..i { mask[j] = true; }
+        } else {
+            i += 1;
+        }
+    }
+    mask
+}
+
+fn wiki_resolve_target<'a>(notes: &'a [NoteMeta], target: &str) -> Option<&'a NoteMeta> {
+    let active: Vec<_> = notes.iter().filter(|n| n.folder != NoteFolder::Trash).collect();
+    if wiki_is_path_like(target) {
+        let clean = target.trim_start_matches('/');
+        // Try exact path match
+        if let Some(n) = active.iter().find(|n| n.path == clean) {
+            return Some(n);
+        }
+        // Try suffix match
+        active.iter().find(|n| n.path.ends_with(clean)).copied()
+    } else {
+        let lower = target.to_lowercase();
+        active.iter().find(|n| n.title.to_lowercase() == lower).copied()
+    }
+}
+
+fn rewrite_wikilinks_for_rename(body: &str, notes: &[NoteMeta], old_path: &str, new_title: &str) -> (String, usize) {
+    let mask = wiki_code_mask(body);
+    let mut result = String::with_capacity(body.len());
+    let mut count = 0usize;
+    let mut i = 0;
+    let bytes = body.as_bytes();
+    let len = bytes.len();
+
+    while i < len {
+        if i + 1 < len && bytes[i] == b'[' && bytes[i + 1] == b'[' && !mask[i] {
+            // Find closing ]]
+            let start = i;
+            i += 2;
+            let content_start = i;
+            while i + 1 < len && !(bytes[i] == b']' && bytes[i + 1] == b']') {
+                i += 1;
+            }
+            if i + 1 >= len {
+                // No closing ]], just append rest
+                result.push_str(&body[start..]);
+                i = len;
+                break;
+            }
+            let content = &body[content_start..i];
+            i += 2; // skip ]]
+
+            let (target, anchor, alias) = wiki_split_content(content);
+            if let Some(resolved) = wiki_resolve_target(notes, target) {
+                if resolved.path == old_path {
+                    count += 1;
+                    let new_target = if wiki_is_path_like(target) {
+                        wiki_swap_basename(target, new_title)
+                    } else {
+                        new_title.to_string()
+                    };
+                    result.push_str("[[");
+                    result.push_str(&new_target);
+                    result.push_str(anchor);
+                    if !alias.is_empty() {
+                        result.push('|');
+                        result.push_str(alias);
+                    }
+                    result.push_str("]]");
+                    continue;
+                }
+            }
+            result.push_str(&body[start..i]);
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    (result, count)
+}
+
 fn kind_for_ext(ext: &str) -> &'static str {
     match ext.to_lowercase().as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "avif" | "apng" => "image",
@@ -1441,5 +1604,43 @@ mod tests {
         std::fs::write(vault.root().join("trash").join("Old.md"), "# Old\n\nfindme in trash\n").unwrap();
         let results = vault.search_vault_text("findme", None).unwrap();
         assert!(results.iter().all(|r| !r.path.starts_with("trash/")));
+    }
+
+    #[test]
+    fn test_rename_updates_wikilinks() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(
+            vault.root().join("inbox").join("Linker.md"),
+            "# Linker\n\nSee [[Welcome to Zenvoy]] for info.\n"
+        ).unwrap();
+        vault.rename_note("inbox/Welcome.md", "Getting Started").unwrap();
+        let linker = vault.read_note("inbox/Linker.md").unwrap();
+        assert!(linker.body.contains("[[Getting Started]]"));
+        assert!(!linker.body.contains("[[Welcome to Zenvoy]]"));
+    }
+
+    #[test]
+    fn test_rename_preserves_alias() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(
+            vault.root().join("inbox").join("WithAlias.md"),
+            "# With Alias\n\nSee [[Welcome to Zenvoy|my welcome]] for info.\n"
+        ).unwrap();
+        vault.rename_note("inbox/Welcome.md", "Hello World").unwrap();
+        let content = vault.read_note("inbox/WithAlias.md").unwrap();
+        assert!(content.body.contains("[[Hello World|my welcome]]"));
+    }
+
+    #[test]
+    fn test_rename_skips_code_blocks() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(
+            vault.root().join("inbox").join("Code.md"),
+            "# Code\n\n```\n[[Welcome to Zenvoy]]\n```\n\nAlso [[Welcome to Zenvoy]] outside.\n"
+        ).unwrap();
+        vault.rename_note("inbox/Welcome.md", "New Name").unwrap();
+        let content = vault.read_note("inbox/Code.md").unwrap();
+        assert!(content.body.contains("```\n[[Welcome to Zenvoy]]\n```"));
+        assert!(content.body.contains("[[New Name]] outside"));
     }
 }
