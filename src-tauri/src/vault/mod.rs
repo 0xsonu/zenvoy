@@ -634,6 +634,74 @@ impl Vault {
 
     // --- Asset management ---
 
+    pub fn get_text_search_capabilities(&self) -> TextSearchCapabilities {
+        TextSearchCapabilities {
+            ripgrep: which_exists("rg"),
+            fzf: which_exists("fzf"),
+        }
+    }
+
+    pub fn search_vault_text(&self, query: &str, _backend: Option<&str>) -> VaultResult<Vec<TextSearchMatch>> {
+        const MAX_RESULTS: usize = 200;
+        if which_exists("rg") {
+            if let Ok(results) = self.search_with_ripgrep(query, MAX_RESULTS) {
+                return Ok(results);
+            }
+        }
+        self.search_fallback(query, MAX_RESULTS)
+    }
+
+    fn search_with_ripgrep(&self, query: &str, max: usize) -> VaultResult<Vec<TextSearchMatch>> {
+        let output = std::process::Command::new("rg")
+            .args(["--no-heading", "-n", "--color", "never", "-g", "*.md", "--", query])
+            .arg(&self.root)
+            .output()?;
+        let mut results = Vec::new();
+        let query_lower = query.to_lowercase();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if results.len() >= max { break; }
+            // Format: <filepath>:<line_number>:<line_text>
+            let Some((file_path, rest)) = line.split_once(':') else { continue };
+            let Some((line_num_str, line_text)) = rest.split_once(':') else { continue };
+            let Ok(line_number) = line_num_str.parse::<i32>() else { continue };
+            let rel = match Path::new(file_path).strip_prefix(&self.root) {
+                Ok(r) => r.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/"),
+                Err(_) => continue,
+            };
+            if rel.starts_with("trash/") { continue; }
+            let title = Path::new(file_path).file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let folder = safepath::folder_for_relative_path(&rel).unwrap_or(NoteFolder::Inbox);
+            let offset = line_text.to_lowercase().find(&query_lower).map(|i| i as i32).unwrap_or(0);
+            results.push(TextSearchMatch { path: rel, title, folder, line_number, offset, line_text: line_text.to_string() });
+        }
+        Ok(results)
+    }
+
+    fn search_fallback(&self, query: &str, max: usize) -> VaultResult<Vec<TextSearchMatch>> {
+        let notes = self.list_notes()?;
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::new();
+        for note in &notes {
+            if note.folder == NoteFolder::Trash { continue; }
+            if results.len() >= max { break; }
+            let content = self.read_note(&note.path)?;
+            for (i, line) in content.body.lines().enumerate() {
+                if results.len() >= max { break; }
+                if let Some(offset) = line.to_lowercase().find(&query_lower) {
+                    results.push(TextSearchMatch {
+                        path: note.path.clone(),
+                        title: Path::new(&note.path).file_stem().unwrap_or_default().to_string_lossy().to_string(),
+                        folder: note.folder.clone(),
+                        line_number: (i + 1) as i32,
+                        offset: offset as i32,
+                        line_text: line.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(results)
+    }
+
     pub fn scan_tasks(&self) -> VaultResult<Vec<VaultTask>> {
         let notes = self.list_notes()?;
         let mut tasks = Vec::new();
@@ -803,6 +871,10 @@ impl Vault {
             .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
         Ok(AssetMeta { path: rel_str, name, kind: kind_for_ext(&ext).to_string(), sibling_order: 0, size: m.len() as i64, updated_at: mtime_ms })
     }
+}
+
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new(cmd).arg("--version").output().is_ok()
 }
 
 fn sanitize_file_stem(title: &str) -> String {
@@ -1343,5 +1415,31 @@ mod tests {
         ).unwrap();
         let tasks = vault.scan_tasks().unwrap();
         assert!(!tasks.iter().any(|t| t.content.contains("Deleted task")));
+    }
+
+    #[test]
+    fn test_search_capabilities() {
+        let (_dir, vault) = test_vault();
+        let caps = vault.get_text_search_capabilities();
+        let _ = caps;
+    }
+
+    #[test]
+    fn test_search_vault_text() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(vault.root().join("inbox").join("Searchable.md"), "# Search Target\n\nThis contains the keyword findme in a sentence.\n").unwrap();
+        let results = vault.search_vault_text("findme", None).unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].path, "inbox/Searchable.md");
+        assert!(results[0].line_text.contains("findme"));
+        assert_eq!(results[0].line_number, 3);
+    }
+
+    #[test]
+    fn test_search_skips_trash() {
+        let (_dir, vault) = test_vault();
+        std::fs::write(vault.root().join("trash").join("Old.md"), "# Old\n\nfindme in trash\n").unwrap();
+        let results = vault.search_vault_text("findme", None).unwrap();
+        assert!(results.iter().all(|r| !r.path.starts_with("trash/")));
     }
 }
