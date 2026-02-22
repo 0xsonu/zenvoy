@@ -739,6 +739,42 @@ impl Vault {
         Ok(parse::parse_tasks(&content.meta.path, &content.meta.title, &content.meta.folder, &content.body))
     }
 
+    // --- Comments ---
+
+    fn comments_path_for(&self, rel: &str) -> PathBuf {
+        self.comments_root().join(format!("{}.comments.json", rel))
+    }
+
+    pub fn read_note_comments(&self, rel: &str) -> VaultResult<Vec<NoteComment>> {
+        let path = self.comments_path_for(rel);
+        match fs::read_to_string(&path) {
+            Ok(raw) => {
+                let wrapper: serde_json::Value = serde_json::from_str(&raw)?;
+                let comments: Vec<NoteComment> = serde_json::from_value(
+                    wrapper.get("comments").cloned().unwrap_or(serde_json::Value::Array(vec![]))
+                )?;
+                Ok(normalize_comments(comments, rel))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+            Err(e) => Err(VaultError::Io(e)),
+        }
+    }
+
+    pub fn write_note_comments(&self, rel: &str, comments: Vec<NoteComment>) -> VaultResult<Vec<NoteComment>> {
+        let path = self.comments_path_for(rel);
+        let normalized = normalize_comments(comments, rel);
+        if normalized.is_empty() {
+            let _ = fs::remove_file(&path);
+            return Ok(vec![]);
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let wrapper = serde_json::json!({ "version": 1, "comments": normalized });
+        fs::write(&path, serde_json::to_string_pretty(&wrapper)?)?;
+        Ok(normalized)
+    }
+
     pub fn has_assets_dir(&self) -> bool {
         self.root.join("attachements").is_dir() || self.root.join("_assets").is_dir()
     }
@@ -1197,6 +1233,35 @@ fn rewrite_wikilinks_for_rename(body: &str, notes: &[NoteMeta], old_path: &str, 
     (result, count)
 }
 
+fn new_comment_id() -> String {
+    uuid::Uuid::new_v4().to_string().replace('-', "")
+}
+
+fn normalize_comments(comments: Vec<NoteComment>, note_path: &str) -> Vec<NoteComment> {
+    use std::collections::HashSet;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let mut seen = HashSet::new();
+    let mut out: Vec<NoteComment> = comments
+        .into_iter()
+        .filter(|c| !c.body.trim().is_empty())
+        .map(|mut c| {
+            if c.id.is_empty() { c.id = new_comment_id(); }
+            if c.created_at == 0 { c.created_at = now; }
+            if c.updated_at == 0 { c.updated_at = c.created_at; }
+            if c.anchor_start < 0 { c.anchor_start = 0; }
+            if c.anchor_end < c.anchor_start { c.anchor_end = c.anchor_start; }
+            c.note_path = note_path.to_string();
+            c
+        })
+        .filter(|c| seen.insert(c.id.clone()))
+        .collect();
+    out.sort_by_key(|c| c.created_at);
+    out
+}
+
 fn kind_for_ext(ext: &str) -> &'static str {
     match ext.to_lowercase().as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "avif" | "apng" => "image",
@@ -1642,5 +1707,55 @@ mod tests {
         let content = vault.read_note("inbox/Code.md").unwrap();
         assert!(content.body.contains("```\n[[Welcome to Zenvoy]]\n```"));
         assert!(content.body.contains("[[New Name]] outside"));
+    }
+
+    #[test]
+    fn test_read_comments_empty() {
+        let (_dir, vault) = test_vault();
+        let comments = vault.read_note_comments("inbox/Welcome.md").unwrap();
+        assert!(comments.is_empty());
+    }
+
+    #[test]
+    fn test_write_and_read_comments() {
+        let (_dir, vault) = test_vault();
+        let input = vec![NoteComment {
+            id: String::new(),
+            note_path: "inbox/Welcome.md".to_string(),
+            anchor_start: 0,
+            anchor_end: 10,
+            anchor_text: "Welcome to".to_string(),
+            body: "Great intro!".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            resolved_at: None,
+        }];
+        let saved = vault.write_note_comments("inbox/Welcome.md", input).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].id.is_empty());
+        assert!(saved[0].created_at > 0);
+        let loaded = vault.read_note_comments("inbox/Welcome.md").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].body, "Great intro!");
+    }
+
+    #[test]
+    fn test_write_empty_comments_deletes_file() {
+        let (_dir, vault) = test_vault();
+        let input = vec![NoteComment {
+            id: "abc".to_string(),
+            note_path: "inbox/Welcome.md".to_string(),
+            anchor_start: 0,
+            anchor_end: 5,
+            anchor_text: "test".to_string(),
+            body: "comment".to_string(),
+            created_at: 1000,
+            updated_at: 1000,
+            resolved_at: None,
+        }];
+        vault.write_note_comments("inbox/Welcome.md", input).unwrap();
+        vault.write_note_comments("inbox/Welcome.md", vec![]).unwrap();
+        let loaded = vault.read_note_comments("inbox/Welcome.md").unwrap();
+        assert!(loaded.is_empty());
     }
 }
