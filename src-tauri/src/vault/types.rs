@@ -239,3 +239,41 @@ pub struct VaultDemoTourResult {
     pub success: bool,
     pub paths: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseSidecar {
+    pub version: i32,
+    pub id_field_id: String,
+    pub fields: Vec<serde_json::Value>,
+    pub views: Vec<serde_json::Value>,
+    pub active_view_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbRow {
+    pub id: String,
+    pub cells: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseDoc {
+    #[serde(flatten)]
+    pub sidecar: DatabaseSidecar,
+    pub path: String,
+    pub title: String,
+    pub rows: Vec<DbRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseSummary {
+    pub path: String,
+    pub title: String,
+    pub folder: NoteFolder,
+    pub row_count: usize,
+}

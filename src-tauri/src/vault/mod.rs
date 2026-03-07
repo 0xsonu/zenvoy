@@ -41,6 +41,8 @@ pub enum VaultError {
     AlreadyExists(String),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("csv error: {0}")]
+    Csv(#[from] csv::Error),
     #[error("asset too large")]
     AssetTooLarge,
 }
@@ -928,6 +930,182 @@ impl Vault {
             .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
         Ok(AssetMeta { path: rel_str, name, kind: kind_for_ext(&ext).to_string(), sibling_order: 0, size: m.len() as i64, updated_at: mtime_ms })
     }
+
+    // --- Database (CSV) operations ---
+
+    pub fn open_database(&self, rel: &str) -> VaultResult<DatabaseDoc> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(rel.to_string()));
+        }
+        let sidecar_path = PathBuf::from(format!("{}.base.json", abs.display()));
+        let sidecar = if sidecar_path.is_file() {
+            serde_json::from_str(&fs::read_to_string(&sidecar_path)?)?
+        } else {
+            self.infer_sidecar_from_csv(&abs)?
+        };
+        let rows = self.read_csv_rows(&abs)?;
+        let title = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        Ok(DatabaseDoc { sidecar, path: rel.to_string(), title, rows })
+    }
+
+    pub fn write_database_rows(&self, rel: &str, rows: Vec<DbRow>) -> VaultResult<DatabaseDoc> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        let sidecar_path = PathBuf::from(format!("{}.base.json", abs.display()));
+        let sidecar: DatabaseSidecar = if sidecar_path.is_file() {
+            serde_json::from_str(&fs::read_to_string(&sidecar_path)?)?
+        } else {
+            self.infer_sidecar_from_csv(&abs)?
+        };
+        self.write_csv_rows(&abs, &sidecar, &rows)?;
+        self.open_database(rel)
+    }
+
+    pub fn write_database_schema(&self, rel: &str, sidecar: DatabaseSidecar, rows: Vec<DbRow>) -> VaultResult<DatabaseDoc> {
+        let abs = safepath::safe_join(&self.root, rel)?;
+        let sidecar_path = PathBuf::from(format!("{}.base.json", abs.display()));
+        fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)?;
+        self.write_csv_rows(&abs, &sidecar, &rows)?;
+        self.open_database(rel)
+    }
+
+    pub fn create_database(&self, folder: &NoteFolder, subpath: &str, title: Option<&str>) -> VaultResult<DatabaseDoc> {
+        let stem = title.map(|t| sanitize_file_stem(t)).unwrap_or_else(default_title);
+        let stem = if stem.is_empty() { default_title() } else { stem };
+        let base = self.folder_root(folder)?;
+        let dir = if subpath.is_empty() { base } else { base.join(subpath) };
+        fs::create_dir_all(&dir)?;
+        let csv_path = unique_path(&dir, &stem, "csv");
+        let sidecar_path = PathBuf::from(format!("{}.base.json", csv_path.display()));
+
+        let headers = vec!["id".to_string(), "Title".to_string(), "Status".to_string()];
+        let sidecar = self.default_sidecar(&headers);
+        fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)?;
+
+        // Write empty CSV with just headers
+        let mut wtr = csv::Writer::from_path(&csv_path)?;
+        wtr.write_record(&headers)?;
+        wtr.flush()?;
+
+        let rel = csv_path.strip_prefix(&self.root).unwrap()
+            .components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+        let title_str = csv_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        Ok(DatabaseDoc { sidecar, path: rel, title: title_str, rows: vec![] })
+    }
+
+    pub fn create_record_page(&self, csv_path: &str, title: &str, body: &str) -> VaultResult<String> {
+        let abs = safepath::safe_join(&self.root, csv_path)?;
+        let db_name = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let dir = abs.parent().unwrap().join(&db_name);
+        fs::create_dir_all(&dir)?;
+        let stem = sanitize_file_stem(title);
+        let stem = if stem.is_empty() { default_title() } else { stem };
+        let dest = unique_path(&dir, &stem, "md");
+        fs::write(&dest, body)?;
+        let rel = dest.strip_prefix(&self.root).unwrap()
+            .components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+        Ok(rel)
+    }
+
+    pub fn list_databases(&self) -> VaultResult<Vec<DatabaseSummary>> {
+        let folders = [NoteFolder::Inbox, NoteFolder::Quick, NoteFolder::Archive];
+        let mut result = Vec::new();
+        for folder in &folders {
+            let base = self.folder_root(folder)?;
+            if !base.is_dir() { continue; }
+            self.walk_csv(&base, folder, &mut result)?;
+        }
+        Ok(result)
+    }
+
+    fn walk_csv(&self, dir: &Path, folder: &NoteFolder, out: &mut Vec<DatabaseSummary>) -> VaultResult<()> {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                self.walk_csv(&path, folder, out)?;
+            } else if path.extension().map(|e| e == "csv").unwrap_or(false) {
+                let row_count = self.count_csv_rows(&path);
+                let rel = path.strip_prefix(&self.root).unwrap()
+                    .components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+                let title = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                out.push(DatabaseSummary { path: rel, title, folder: folder.clone(), row_count });
+            }
+        }
+        Ok(())
+    }
+
+    fn count_csv_rows(&self, abs: &Path) -> usize {
+        let mut rdr = match csv::Reader::from_path(abs) {
+            Ok(r) => r,
+            Err(_) => return 0,
+        };
+        rdr.records().count()
+    }
+
+    fn read_csv_rows(&self, abs: &Path) -> VaultResult<Vec<DbRow>> {
+        let mut rdr = csv::Reader::from_path(abs)?;
+        let headers: Vec<String> = rdr.headers()?.iter().map(|h| h.to_string()).collect();
+        let mut rows = Vec::new();
+        for record in rdr.records() {
+            let record = record?;
+            let mut cells = HashMap::new();
+            for (i, val) in record.iter().enumerate() {
+                if let Some(header) = headers.get(i) {
+                    cells.insert(header.clone(), val.to_string());
+                }
+            }
+            let id = cells.get("id").cloned().unwrap_or_default();
+            rows.push(DbRow { id, cells });
+        }
+        Ok(rows)
+    }
+
+    fn write_csv_rows(&self, abs: &Path, sidecar: &DatabaseSidecar, rows: &[DbRow]) -> VaultResult<()> {
+        let headers = self.field_names_from_sidecar(sidecar);
+        let mut wtr = csv::Writer::from_path(abs)?;
+        wtr.write_record(&headers)?;
+        for row in rows {
+            let record: Vec<String> = headers.iter().map(|h| row.cells.get(h).cloned().unwrap_or_default()).collect();
+            wtr.write_record(&record)?;
+        }
+        wtr.flush()?;
+        Ok(())
+    }
+
+    fn field_names_from_sidecar(&self, sidecar: &DatabaseSidecar) -> Vec<String> {
+        let mut names: Vec<String> = sidecar.fields.iter().filter_map(|f| {
+            f.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+        }).collect();
+        if names.is_empty() {
+            names = vec!["id".to_string(), "Title".to_string(), "Status".to_string()];
+        }
+        names
+    }
+
+    fn infer_sidecar_from_csv(&self, abs: &Path) -> VaultResult<DatabaseSidecar> {
+        let mut rdr = csv::Reader::from_path(abs)?;
+        let headers: Vec<String> = rdr.headers()?.iter().map(|h| h.to_string()).collect();
+        Ok(self.default_sidecar(&headers))
+    }
+
+    fn default_sidecar(&self, headers: &[String]) -> DatabaseSidecar {
+        let fields: Vec<serde_json::Value> = headers.iter().map(|name| {
+            serde_json::json!({ "name": name, "type": "text", "id": name })
+        }).collect();
+        let view_id = "default-view".to_string();
+        DatabaseSidecar {
+            version: 1,
+            id_field_id: "id".to_string(),
+            fields,
+            views: vec![serde_json::json!({ "id": view_id, "type": "table" })],
+            active_view_id: view_id,
+            pages: None,
+        }
+    }
 }
 
 fn which_exists(cmd: &str) -> bool {
@@ -1757,5 +1935,37 @@ mod tests {
         vault.write_note_comments("inbox/Welcome.md", vec![]).unwrap();
         let loaded = vault.read_note_comments("inbox/Welcome.md").unwrap();
         assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn test_create_and_open_database() {
+        let (_dir, vault) = test_vault();
+        let doc = vault.create_database(&NoteFolder::Inbox, "", Some("Projects")).unwrap();
+        assert_eq!(doc.title, "Projects");
+        assert!(doc.rows.is_empty());
+        let opened = vault.open_database(&doc.path).unwrap();
+        assert_eq!(opened.title, "Projects");
+    }
+
+    #[test]
+    fn test_list_databases() {
+        let (_dir, vault) = test_vault();
+        vault.create_database(&NoteFolder::Inbox, "", Some("DB1")).unwrap();
+        vault.create_database(&NoteFolder::Inbox, "", Some("DB2")).unwrap();
+        let dbs = vault.list_databases().unwrap();
+        assert_eq!(dbs.len(), 2);
+    }
+
+    #[test]
+    fn test_write_database_rows() {
+        let (_dir, vault) = test_vault();
+        let doc = vault.create_database(&NoteFolder::Inbox, "", Some("Tasks")).unwrap();
+        let mut cells = std::collections::HashMap::new();
+        cells.insert("id".to_string(), "row-1".to_string());
+        cells.insert("Title".to_string(), "First Task".to_string());
+        cells.insert("Status".to_string(), "Todo".to_string());
+        let rows = vec![DbRow { id: "row-1".to_string(), cells }];
+        let updated = vault.write_database_rows(&doc.path, rows).unwrap();
+        assert_eq!(updated.rows.len(), 1);
     }
 }
