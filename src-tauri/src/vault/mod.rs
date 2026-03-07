@@ -1092,6 +1092,71 @@ impl Vault {
         Ok(self.default_sidecar(&headers))
     }
 
+    // --- Templates ---
+
+    fn templates_dir(&self) -> PathBuf {
+        self.root.join(INTERNAL_VAULT_DIR).join("templates")
+    }
+
+    pub fn list_templates(&self) -> VaultResult<Vec<CustomTemplateFile>> {
+        let dir = self.templates_dir();
+        if !dir.is_dir() {
+            return Ok(vec![]);
+        }
+        let mut results = Vec::new();
+        for entry in fs::read_dir(&dir)?.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
+                let rel = format!(".zenvoy/templates/{}", path.file_name().unwrap().to_string_lossy());
+                let raw = fs::read_to_string(&path)?;
+                results.push(CustomTemplateFile { source_path: rel, raw });
+            }
+        }
+        results.sort_by(|a, b| a.source_path.cmp(&b.source_path));
+        Ok(results)
+    }
+
+    pub fn read_template(&self, source_path: &str) -> VaultResult<String> {
+        if !source_path.starts_with(".zenvoy/templates/") || !source_path.ends_with(".md") || source_path.contains("..") {
+            return Err(VaultError::PathEscape);
+        }
+        let abs = self.root.join(source_path);
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(source_path.to_string()));
+        }
+        Ok(fs::read_to_string(&abs)?)
+    }
+
+    pub fn write_template(&self, input: &WriteTemplateInput) -> VaultResult<CustomTemplateFile> {
+        let dir = self.templates_dir();
+        fs::create_dir_all(&dir)?;
+        let slug = safe_slug(&input.slug);
+        let path = unique_path(&dir, &slug, "md");
+        fs::write(&path, &input.raw)?;
+        let source_path = format!(".zenvoy/templates/{}", path.file_name().unwrap().to_string_lossy());
+        if let Some(prev) = &input.previous_source_path {
+            if prev != &source_path {
+                let prev_abs = self.root.join(prev);
+                if prev_abs.is_file() {
+                    fs::remove_file(&prev_abs)?;
+                }
+            }
+        }
+        Ok(CustomTemplateFile { source_path, raw: input.raw.clone() })
+    }
+
+    pub fn delete_template(&self, source_path: &str) -> VaultResult<()> {
+        if !source_path.starts_with(".zenvoy/templates/") || !source_path.ends_with(".md") || source_path.contains("..") {
+            return Err(VaultError::PathEscape);
+        }
+        let abs = self.root.join(source_path);
+        if !abs.is_file() {
+            return Err(VaultError::NotFound(source_path.to_string()));
+        }
+        fs::remove_file(&abs)?;
+        Ok(())
+    }
+
     fn default_sidecar(&self, headers: &[String]) -> DatabaseSidecar {
         let fields: Vec<serde_json::Value> = headers.iter().map(|name| {
             serde_json::json!({ "name": name, "type": "text", "id": name })
@@ -1110,6 +1175,12 @@ impl Vault {
 
 fn which_exists(cmd: &str) -> bool {
     std::process::Command::new(cmd).arg("--version").output().is_ok()
+}
+
+fn safe_slug(slug: &str) -> String {
+    let s: String = slug.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect();
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() { "template".to_string() } else { s }
 }
 
 fn sanitize_file_stem(title: &str) -> String {
@@ -1967,5 +2038,42 @@ mod tests {
         let rows = vec![DbRow { id: "row-1".to_string(), cells }];
         let updated = vault.write_database_rows(&doc.path, rows).unwrap();
         assert_eq!(updated.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_list_templates_empty() {
+        let (_dir, vault) = test_vault();
+        let templates = vault.list_templates().unwrap();
+        assert!(templates.is_empty());
+    }
+
+    #[test]
+    fn test_write_and_read_template() {
+        let (_dir, vault) = test_vault();
+        let input = WriteTemplateInput {
+            slug: "Meeting Notes".to_string(),
+            raw: "---\nname: Meeting Notes\n---\n# {{title}}\n\nDate: {{date}}\n".to_string(),
+            previous_source_path: None,
+        };
+        let created = vault.write_template(&input).unwrap();
+        assert!(created.source_path.contains("meeting-notes"));
+        let content = vault.read_template(&created.source_path).unwrap();
+        assert!(content.contains("Meeting Notes"));
+        let templates = vault.list_templates().unwrap();
+        assert_eq!(templates.len(), 1);
+    }
+
+    #[test]
+    fn test_delete_template() {
+        let (_dir, vault) = test_vault();
+        let input = WriteTemplateInput {
+            slug: "doomed".to_string(),
+            raw: "# Doomed\n".to_string(),
+            previous_source_path: None,
+        };
+        let created = vault.write_template(&input).unwrap();
+        vault.delete_template(&created.source_path).unwrap();
+        let templates = vault.list_templates().unwrap();
+        assert!(templates.is_empty());
     }
 }

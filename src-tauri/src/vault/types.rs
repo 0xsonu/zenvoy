@@ -277,3 +277,19 @@ pub struct DatabaseSummary {
     pub folder: NoteFolder,
     pub row_count: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomTemplateFile {
+    pub source_path: String,
+    pub raw: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteTemplateInput {
+    pub slug: String,
+    pub raw: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_source_path: Option<String>,
+}
