@@ -1157,6 +1157,45 @@ impl Vault {
         Ok(())
     }
 
+    // --- Demo Tour ---
+
+    const DEMO_ENTRIES: &'static [(&'static str, &'static str)] = &[
+        ("inbox/Getting Started.md", "# Getting Started with Zenvoy\n\nWelcome! Here's a quick overview of what you can do:\n\n## Writing Notes\n\nUse **bold**, *italic*, and ~~strikethrough~~ formatting.\n\n## Tasks\n\n- [ ] Try creating a new note\n- [ ] Explore the sidebar folders\n- [x] Open the demo tour ✓\n\n## Tags & Links\n\nOrganize with #tags and connect ideas with [[Quick Thought]].\n\n## Code\n\n```rust\nfn main() {\n    println!(\"Hello, Zenvoy!\");\n}\n```\n\n## Math\n\nInline $E = mc^2$ or block:\n\n$$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$\n"),
+        ("inbox/Daily Notes/2024-01-15.md", "# 2024-01-15\n\n## Morning\n\n- [ ] Review pull requests\n- [x] Stand-up meeting\n\n## Notes\n\nDiscussed the new feature with the team. See [[Web App]] for details.\n\n#daily #journal\n"),
+        ("inbox/Projects/Web App.md", "# Web App\n\n## Overview\n\nBuilding a note-taking app with offline-first sync.\n\n## Tasks\n\n- [ ] Design the API schema !high\n- [ ] Set up CI/CD pipeline due:2024-02-01\n- [ ] Write integration tests\n- [x] Choose tech stack\n\n## Stack\n\n- Frontend: React + TypeScript\n- Backend: Rust + Tauri\n- Storage: SQLite\n\n#project #dev\n"),
+        ("quick/Quick Thought.md", "# Quick Thought\n\nJust a fleeting idea captured on the go.\n\n> The best time to capture a thought is the moment it appears.\n\nRelated: [[Getting Started]]\n\n#idea\n"),
+    ];
+
+    pub fn generate_demo_tour(&self) -> VaultResult<VaultDemoTourResult> {
+        let mut paths = Vec::new();
+        for (rel, body) in Self::DEMO_ENTRIES {
+            let abs = safepath::safe_join(&self.root, rel)?;
+            if abs.exists() {
+                continue;
+            }
+            if let Some(parent) = abs.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&abs, body)?;
+            paths.push(rel.to_string());
+        }
+        self.invalidate_caches();
+        Ok(VaultDemoTourResult { success: true, paths })
+    }
+
+    pub fn remove_demo_tour(&self) -> VaultResult<VaultDemoTourResult> {
+        let mut paths = Vec::new();
+        for (rel, _) in Self::DEMO_ENTRIES {
+            let abs = safepath::safe_join(&self.root, rel)?;
+            if abs.is_file() {
+                fs::remove_file(&abs)?;
+                paths.push(rel.to_string());
+            }
+        }
+        self.invalidate_caches();
+        Ok(VaultDemoTourResult { success: true, paths })
+    }
+
     fn default_sidecar(&self, headers: &[String]) -> DatabaseSidecar {
         let fields: Vec<serde_json::Value> = headers.iter().map(|name| {
             serde_json::json!({ "name": name, "type": "text", "id": name })
@@ -2061,6 +2100,26 @@ mod tests {
         assert!(content.contains("Meeting Notes"));
         let templates = vault.list_templates().unwrap();
         assert_eq!(templates.len(), 1);
+    }
+
+    #[test]
+    fn test_generate_demo_tour() {
+        let (_dir, vault) = test_vault();
+        let result = vault.generate_demo_tour().unwrap();
+        assert!(result.success);
+        assert!(!result.paths.is_empty());
+        // Verify notes were created
+        let notes = vault.list_notes().unwrap();
+        assert!(notes.len() > 1); // More than just Welcome.md
+    }
+
+    #[test]
+    fn test_remove_demo_tour() {
+        let (_dir, vault) = test_vault();
+        vault.generate_demo_tour().unwrap();
+        let result = vault.remove_demo_tour().unwrap();
+        assert!(result.success);
+        assert!(!result.paths.is_empty());
     }
 
     #[test]
