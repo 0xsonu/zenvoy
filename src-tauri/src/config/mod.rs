@@ -155,3 +155,50 @@ fn env_enabled(name: &str) -> bool {
         "1" | "true" | "yes" | "on"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_base_path_empty() {
+        assert_eq!(normalize_base_path(""), "");
+        assert_eq!(normalize_base_path("/"), "");
+        assert_eq!(normalize_base_path("  "), "");
+    }
+
+    #[test]
+    fn test_normalize_base_path_adds_leading_slash() {
+        assert_eq!(normalize_base_path("zenvoy"), "/zenvoy");
+    }
+
+    #[test]
+    fn test_normalize_base_path_removes_trailing_slash() {
+        assert_eq!(normalize_base_path("/zenvoy/"), "/zenvoy");
+    }
+
+    #[test]
+    fn test_normalize_base_path_collapses_slashes() {
+        assert_eq!(normalize_base_path("/foo//bar"), "/foo/bar");
+    }
+
+    #[test]
+    fn test_default_config() {
+        let cfg = Config::default();
+        assert_eq!(cfg.bind, "127.0.0.1:7878");
+        assert_eq!(cfg.max_asset_bytes, 50 << 20);
+        assert_eq!(cfg.max_note_bytes, 10 << 20);
+        assert!(cfg.bind_is_loopback());
+    }
+
+    #[test]
+    fn test_bind_is_loopback() {
+        let mut cfg = Config::default();
+        cfg.bind = "127.0.0.1:7878".to_string();
+        assert!(cfg.bind_is_loopback());
+        cfg.bind = "localhost:7878".to_string();
+        assert!(cfg.bind_is_loopback());
+        cfg.bind = "0.0.0.0:7878".to_string();
+        assert!(!cfg.bind_is_loopback());
+    }
+}
