@@ -3416,6 +3416,7 @@ dependencies = [
  "csv",
  "dirs 5.0.1",
  "hex",
+ "http",
  "mime_guess",
  "notify",
  "once_cell",
