@@ -5,13 +5,18 @@ use serde_json::{json, Value};
 
 use super::AppState;
 
-pub fn api_routes(state: Arc<AppState>) -> Router {
+pub fn public_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/platform", get(platform))
         .route("/capabilities", get(capabilities))
         .with_state(state)
+}
+
+pub fn protected_routes(_state: Arc<AppState>) -> Router {
+    // Future protected routes go here
+    Router::new().with_state(_state)
 }
 
 async fn healthz() -> Json<Value> {
