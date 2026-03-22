@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
 
-use axum::{extract::{Query, State}, http::StatusCode, routing::{get, post}, Json, Router};
+use axum::{extract::{Query, State}, extract::ws::{WebSocket, WebSocketUpgrade, Message}, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -52,6 +52,7 @@ pub fn protected_routes(state: Arc<AppState>) -> Router {
         .route("/tasks/for", get(tasks_for))
         .route("/demo/generate", post(demo_generate))
         .route("/demo/remove", post(demo_remove))
+        .route("/watch", get(watch_ws))
         .with_state(state)
 }
 
@@ -349,4 +350,33 @@ async fn demo_generate(State(state): State<Arc<AppState>>) -> Result<Json<Value>
 async fn demo_remove(State(state): State<Arc<AppState>>) -> Result<Json<Value>, StatusCode> {
     let vault = get_vault(&state)?;
     vault.remove_demo_tour().map(|r| Json(serde_json::to_value(r).unwrap())).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+// --- WebSocket Watch ---
+
+async fn watch_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws(socket, state))
+}
+
+async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
+    let rx = {
+        let watcher = state.watcher.read();
+        watcher.as_ref().map(|w| w.subscribe())
+    };
+    let mut rx = match rx {
+        Some(r) => r,
+        None => { let _ = socket.close().await; return; }
+    };
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                if socket.send(Message::Text(json.into())).await.is_err() { break; }
+            }
+            Err(_) => break,
+        }
+    }
 }
