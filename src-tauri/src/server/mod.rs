@@ -5,8 +5,12 @@ pub mod routes;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::http::{StatusCode, Uri};
 use axum::Router;
 use parking_lot::RwLock;
+use rust_embed::RustEmbed;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::config::Config;
@@ -59,11 +63,43 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             middleware::security_headers,
         ))
         .layer(cors)
-        .layer(CatchPanicLayer::new());
+        .layer(CatchPanicLayer::new())
+        .fallback(get({
+            let state = state.clone();
+            move |uri| serve_static(state.clone(), uri)
+        }));
 
     if !config.base_path.is_empty() {
         app = Router::new().nest(&config.base_path, app);
     }
 
     app
+}
+
+#[derive(RustEmbed)]
+#[folder = "../dist/"]
+struct StaticAssets;
+
+async fn serve_static(
+    state: Arc<AppState>,
+    uri: Uri,
+) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    if let Some(content) = StaticAssets::get(path) {
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        return ([("content-type", mime.as_ref())], content.data.to_vec()).into_response();
+    }
+    match StaticAssets::get("index.html") {
+        Some(content) => {
+            let html = String::from_utf8_lossy(&content.data);
+            let base_path = state.config.read().base_path.clone();
+            let html = if !base_path.is_empty() {
+                html.replace("</head>", &format!("<meta name=\"zn-base-path\" content=\"{}\">\n</head>", base_path))
+            } else {
+                html.to_string()
+            };
+            ([("content-type", "text/html; charset=utf-8")], html).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
