@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use zenvoy_lib::commands::{self, TauriAppState};
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -7,6 +9,78 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
+        .manage(TauriAppState::new())
+        .invoke_handler(tauri::generate_handler![
+            commands::platform,
+            commands::list_system_fonts,
+            commands::get_app_icon_data_url,
+            commands::get_current_vault,
+            commands::list_local_vaults,
+            commands::open_local_vault,
+            commands::close_vault,
+            commands::pick_vault,
+            commands::select_vault_path,
+            commands::browse_server_directories,
+            commands::get_vault_settings,
+            commands::set_vault_settings,
+            commands::list_notes,
+            commands::list_folders,
+            commands::list_assets,
+            commands::has_assets_dir,
+            commands::generate_demo_tour,
+            commands::remove_demo_tour,
+            commands::list_templates,
+            commands::read_template,
+            commands::write_template,
+            commands::delete_template,
+            commands::get_vault_text_search_capabilities,
+            commands::search_vault_text,
+            commands::read_note,
+            commands::read_note_comments,
+            commands::write_note_comments,
+            commands::scan_tasks,
+            commands::scan_tasks_for_path,
+            commands::open_database,
+            commands::write_database_rows,
+            commands::write_database_schema,
+            commands::create_database,
+            commands::create_record_page,
+            commands::list_databases,
+            commands::write_note,
+            commands::append_to_note,
+            commands::create_note,
+            commands::rename_note,
+            commands::delete_note,
+            commands::move_to_trash,
+            commands::restore_from_trash,
+            commands::empty_trash,
+            commands::archive_note,
+            commands::unarchive_note,
+            commands::duplicate_note,
+            commands::move_note,
+            commands::import_files_to_note,
+            commands::import_pasted_image,
+            commands::rename_asset,
+            commands::move_asset,
+            commands::duplicate_asset,
+            commands::delete_asset,
+            commands::restore_deleted_asset,
+            commands::create_folder,
+            commands::rename_folder,
+            commands::delete_folder,
+            commands::duplicate_folder,
+            commands::reveal_note,
+            commands::reveal_folder,
+            commands::reveal_assets_dir,
+            commands::window_minimize,
+            commands::window_toggle_maximize,
+            commands::window_close,
+            commands::zoom_in_app,
+            commands::zoom_out_app,
+            commands::reset_app_zoom,
+            commands::clipboard_write_text,
+            commands::clipboard_read_text,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

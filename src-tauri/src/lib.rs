@@ -4,3 +4,4 @@ pub mod watcher;
 pub mod server;
 pub mod cli;
 pub mod mcp;
+pub mod commands;
