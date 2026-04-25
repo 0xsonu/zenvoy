@@ -622,3 +622,130 @@ pub fn clipboard_read_text(app: tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     app.clipboard().read_text().map_err(|e| e.to_string())
 }
+
+// ── External File Handling ───────────────────────────────────────
+
+#[tauri::command]
+pub async fn read_external_file(_state: State<'_, TauriAppState>) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({"path": "", "body": "", "title": ""}))
+}
+
+#[tauri::command]
+pub async fn write_external_file(_body: String) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn move_external_file_to_vault() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({"moved": false, "path": null}))
+}
+
+#[tauri::command]
+pub async fn open_markdown_file(abs_path: String, app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri::Manager;
+    let label = format!("external-{}", abs_path.len());
+    let url = format!("index.html?externalFile={}", urlencoding_encode(&abs_path));
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+        .title(&abs_path)
+        .inner_size(900.0, 700.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+fn urlencoding_encode(s: &str) -> String {
+    s.bytes().map(|b| match b {
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+        _ => format!("%{:02X}", b),
+    }).collect()
+}
+
+// ── Remote Workspace ─────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_remote_workspace_info() -> Result<serde_json::Value, String> {
+    Ok(serde_json::Value::Null)
+}
+
+#[tauri::command]
+pub async fn connect_remote_workspace(_base_url: String, _auth_token: Option<String>) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({"vault": null, "capabilities": {}}))
+}
+
+#[tauri::command]
+pub async fn disconnect_remote_workspace() -> Result<serde_json::Value, String> {
+    Ok(serde_json::Value::Null)
+}
+
+#[tauri::command]
+pub async fn list_remote_workspace_profiles() -> Result<Vec<serde_json::Value>, String> {
+    Ok(vec![])
+}
+
+#[tauri::command]
+pub async fn save_remote_workspace_profile(input: serde_json::Value) -> Result<serde_json::Value, String> {
+    Ok(input)
+}
+
+#[tauri::command]
+pub async fn delete_remote_workspace_profile(_id: String) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn connect_remote_workspace_profile(_id: String) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({"vault": null, "capabilities": {}}))
+}
+
+#[tauri::command]
+pub async fn get_server_capabilities() -> Result<serde_json::Value, String> {
+    Ok(serde_json::Value::Null)
+}
+
+#[tauri::command]
+pub async fn get_server_session() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({"authenticated": false, "requiresAuth": false}))
+}
+
+#[tauri::command]
+pub async fn login_server_session(_token: String) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({"authenticated": false, "requiresAuth": true}))
+}
+
+#[tauri::command]
+pub async fn logout_server_session() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({"authenticated": false, "requiresAuth": true}))
+}
+
+// ── TikZ Rendering ───────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn render_tikz(source: String) -> Result<serde_json::Value, String> {
+    let tmp = std::env::temp_dir().join(format!("tikz-{}.tex", uuid::Uuid::new_v4()));
+    let doc = format!(r"\documentclass[tikz,border=2pt]{{standalone}}\begin{{document}}{}\end{{document}}", source);
+    if std::fs::write(&tmp, &doc).is_err() {
+        return Ok(serde_json::json!({"svg": null, "error": "Failed to write temp file"}));
+    }
+    let output = std::process::Command::new("pdflatex")
+        .args(["-interaction=nonstopmode", "-output-directory"])
+        .arg(tmp.parent().unwrap())
+        .arg(&tmp)
+        .output();
+    let _ = std::fs::remove_file(&tmp);
+    match output {
+        Ok(out) if out.status.success() => {
+            let pdf = tmp.with_extension("pdf");
+            let svg_out = std::process::Command::new("pdf2svg").arg(&pdf).arg("-").output();
+            let _ = std::fs::remove_file(&pdf);
+            let _ = std::fs::remove_file(tmp.with_extension("aux"));
+            let _ = std::fs::remove_file(tmp.with_extension("log"));
+            match svg_out {
+                Ok(svg) if svg.status.success() => {
+                    Ok(serde_json::json!({"svg": String::from_utf8_lossy(&svg.stdout).to_string(), "error": null}))
+                }
+                _ => Ok(serde_json::json!({"svg": null, "error": "pdf2svg not found or failed"}))
+            }
+        }
+        _ => Ok(serde_json::json!({"svg": null, "error": "pdflatex not found or compilation failed"}))
+    }
+}

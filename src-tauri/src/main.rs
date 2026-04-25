@@ -80,6 +80,22 @@ fn main() {
             commands::reset_app_zoom,
             commands::clipboard_write_text,
             commands::clipboard_read_text,
+            commands::read_external_file,
+            commands::write_external_file,
+            commands::move_external_file_to_vault,
+            commands::open_markdown_file,
+            commands::get_remote_workspace_info,
+            commands::connect_remote_workspace,
+            commands::disconnect_remote_workspace,
+            commands::list_remote_workspace_profiles,
+            commands::save_remote_workspace_profile,
+            commands::delete_remote_workspace_profile,
+            commands::connect_remote_workspace_profile,
+            commands::get_server_capabilities,
+            commands::get_server_session,
+            commands::login_server_session,
+            commands::logout_server_session,
+            commands::render_tikz,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
