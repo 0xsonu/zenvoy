@@ -2,7 +2,7 @@ import React, { Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { createTauriBridge } from './bridge/tauri-bridge'
 import { installZenBridge } from './bridge/contract'
-import './styles/index.css'
+import './app/styles/index.css'
 
 const App = React.lazy(() => import('./app/App'))
 
