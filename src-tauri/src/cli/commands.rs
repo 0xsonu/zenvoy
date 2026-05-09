@@ -1,1 +1,1 @@
-// CLI command implementations will be added in subsequent tasks
+// CLI command logic lives in src/bin/cli.rs
