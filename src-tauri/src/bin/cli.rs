@@ -12,7 +12,7 @@ fn main() {
 
     // Some commands don't need a vault
     match &cli.command {
-        Commands::Mcp => { println!("MCP server starting..."); return; }
+        Commands::Mcp => { zenvoy_lib::mcp::run_mcp_server(); return; }
         _ => {}
     }
 
