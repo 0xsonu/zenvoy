@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  zenvoy:
+    build: .
+    ports:
+      - "7878:7878"
+    volumes:
+      - ./vault:/data/vault
+    environment:
+      - ZENVOY_VAULT_PATH=/data/vault
+      - ZENVOY_BIND=0.0.0.0:7878
+      - ZENVOY_AUTH_TOKEN=${ZENVOY_AUTH_TOKEN:-}
+      - ZENVOY_BEHIND_TLS=${ZENVOY_BEHIND_TLS:-0}
+    restart: unless-stopped
