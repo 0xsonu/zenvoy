@@ -4,6 +4,7 @@ version = "1.0.0"
 edition = "2021"
 description = "Zenvoy — keyboard-first Markdown notes app"
 license = "MIT"
+default-run = "zenvoy"
 
 [lib]
 name = "zenvoy_lib"
