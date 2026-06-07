@@ -3405,47 +3405,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zenvoy"
-version = "1.0.0"
-dependencies = [
- "axum",
- "axum-extra",
- "base64 0.22.1",
- "chrono",
- "clap",
- "csv",
- "dirs 5.0.1",
- "hex",
- "http",
- "mime_guess",
- "notify",
- "once_cell",
- "parking_lot",
- "rand",
- "regex",
- "rust-embed",
- "serde",
- "serde_json",
- "subtle",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "walkdir",
-]
-
-[[package]]
 name = "rust-embed"
 version = "8.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6235,6 +6194,47 @@ dependencies = [
  "serde",
  "winnow 1.0.3",
  "zvariant",
+]
+
+[[package]]
+name = "zenvoy"
+version = "1.0.0"
+dependencies = [
+ "axum",
+ "axum-extra",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "csv",
+ "dirs 5.0.1",
+ "hex",
+ "http",
+ "mime_guess",
+ "notify",
+ "once_cell",
+ "parking_lot",
+ "rand",
+ "regex",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]

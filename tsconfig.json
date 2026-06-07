@@ -19,7 +19,8 @@
     "paths": {
       "@shared/*": ["src/shared/*"],
       "@app/*": ["src/app/*"],
-      "@bridge/*": ["src/bridge/*"]
+      "@bridge/*": ["src/bridge/*"],
+      "@bridge-contract/*": ["src/bridge/*"]
     }
   },
   "include": ["src"],

@@ -11,6 +11,7 @@ export default defineConfig({
       '@shared': path.resolve(__dirname, 'src/shared'),
       '@app': path.resolve(__dirname, 'src/app'),
       '@bridge': path.resolve(__dirname, 'src/bridge'),
+      '@bridge-contract': path.resolve(__dirname, 'src/bridge'),
     },
   },
   clearScreen: false,

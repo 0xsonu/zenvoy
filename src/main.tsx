@@ -1,10 +1,12 @@
-import React, { Suspense } from 'react'
+import React, { lazy, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
-import { createTauriBridge } from './bridge/tauri-bridge'
 import { installZenBridge } from './bridge/contract'
 import './app/styles/index.css'
 
-const App = React.lazy(() => import('./app/App'))
+const App = lazy(() => import('./app/App'))
+const FloatingNoteApp = lazy(() => import('./app/components/FloatingNoteApp').then(m => ({ default: m.FloatingNoteApp })))
+const QuickCaptureApp = lazy(() => import('./app/components/QuickCaptureApp').then(m => ({ default: m.QuickCaptureApp })))
+const ExternalFileApp = lazy(() => import('./app/components/ExternalFileApp').then(m => ({ default: m.ExternalFileApp })))
 
 const root = document.getElementById('root')
 
@@ -33,13 +35,18 @@ window.addEventListener('unhandledrejection', (event) => {
   if (!booted) renderBootError(String(event.reason?.stack ?? event.reason))
 })
 
-try {
-  if (!root) {
-    throw new Error('Root element #root was not found')
-  }
+async function boot() {
+  if (!root) throw new Error('Root element #root was not found')
 
-  const bridge = createTauriBridge()
-  installZenBridge(bridge)
+  const isTauri = !!(window as any).__TAURI_INTERNALS__
+
+  if (isTauri) {
+    const { createTauriBridge } = await import('./bridge/tauri-bridge')
+    installZenBridge(createTauriBridge())
+  } else {
+    const { httpBridge } = await import('./bridge/http-bridge')
+    installZenBridge(httpBridge)
+  }
 
   const params = new URLSearchParams(window.location.search)
   const isFloating = params.get('floating') === '1'
@@ -47,22 +54,26 @@ try {
   const isExternalFile = params.get('externalFile') !== null
   const floatingNotePath = params.get('note')
 
-  // TODO: render specialized windows for floating/quickCapture/externalFile
-  void isFloating
-  void isQuickCapture
-  void isExternalFile
-  void floatingNotePath
-
   ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <Suspense fallback={null}>
-        <App />
+        {isQuickCapture ? (
+          <QuickCaptureApp />
+        ) : isExternalFile ? (
+          <ExternalFileApp />
+        ) : isFloating && floatingNotePath ? (
+          <FloatingNoteApp notePath={floatingNotePath} />
+        ) : (
+          <App />
+        )}
       </Suspense>
     </React.StrictMode>
   )
 
   booted = true
-} catch (error) {
+}
+
+boot().catch((error) => {
   console.error('[zenvoy] boot failed', error)
   renderBootError(String(error instanceof Error ? error.stack ?? error.message : error))
-}
+})

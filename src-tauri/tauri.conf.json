@@ -1,7 +1,7 @@
 {
   "productName": "Zenvoy",
   "version": "1.0.0",
-  "identifier": "org.zenvoy.app",
+  "identifier": "org.zenvoy.notes",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
