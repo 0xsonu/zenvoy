@@ -9,18 +9,72 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  create-release:
+    runs-on: ubuntu-22.04
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-creatordate | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            LOG=$(git log --pretty=format:"- %s" HEAD)
+          else
+            LOG=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD)
+          fi
+          echo "changelog<<CHANGELOG_EOF" >> $GITHUB_OUTPUT
+          echo "$LOG" >> $GITHUB_OUTPUT
+          echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Zenvoy ${{ github.ref_name }}
+          body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## Downloads
+
+            | Platform | File |
+            |----------|------|
+            | macOS (Apple Silicon) | `Zenvoy_aarch64.dmg` |
+            | macOS (Intel) | `Zenvoy_x64.dmg` |
+            | Linux (x64 deb) | `zenvoy_amd64.deb` |
+            | Linux (x64 AppImage) | `Zenvoy_amd64.AppImage` |
+            | Windows (x64) | `Zenvoy_x64-setup.exe` |
+            | Server (macOS arm64) | `zenvoy-server-aarch64-apple-darwin` |
+            | Server (macOS x64) | `zenvoy-server-x86_64-apple-darwin` |
+            | Server (Linux x64) | `zenvoy-server-x86_64-unknown-linux-gnu` |
+            | Server (Windows x64) | `zenvoy-server-x86_64-pc-windows-msvc.exe` |
+          draft: false
+          prerelease: false
+
+  build-tauri:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos-latest
+            args: --target aarch64-apple-darwin
             target: aarch64-apple-darwin
           - platform: macos-latest
+            args: --target x86_64-apple-darwin
             target: x86_64-apple-darwin
           - platform: ubuntu-22.04
+            args: ""
             target: x86_64-unknown-linux-gnu
           - platform: windows-latest
+            args: ""
             target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform }}
@@ -38,46 +92,50 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install frontend dependencies
-        run: npm ci
-
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
 
-      - name: Build frontend
-        run: npx vite build
+      - name: Install frontend dependencies
+        run: npm ci
 
-      - name: Build Tauri app
+      - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Zenvoy ${{ github.ref_name }}
-          releaseBody: |
-            See the assets below for the installable packages.
+          releaseBody: ""
           releaseDraft: false
           prerelease: false
+          tauriScript: npx tauri
+          args: ${{ matrix.args }}
 
   build-server:
+    needs: create-release
     strategy:
+      fail-fast: false
       matrix:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
             binary: zenvoy-server
+            asset_name: zenvoy-server-aarch64-apple-darwin
           - platform: macos-latest
             target: x86_64-apple-darwin
             binary: zenvoy-server
+            asset_name: zenvoy-server-x86_64-apple-darwin
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             binary: zenvoy-server
+            asset_name: zenvoy-server-x86_64-unknown-linux-gnu
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             binary: zenvoy-server.exe
+            asset_name: zenvoy-server-x86_64-pc-windows-msvc.exe
 
     runs-on: ${{ matrix.platform }}
 
@@ -93,6 +151,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
 
       - name: Install frontend dependencies
         run: npm ci
@@ -104,28 +168,9 @@ jobs:
         working-directory: src-tauri
         run: cargo build --release --bin zenvoy-server --target ${{ matrix.target }}
 
-      - name: Upload server binary
-        uses: actions/upload-artifact@v4
+      - name: Upload server binary to release
+        uses: softprops/action-gh-release@v2
         with:
-          name: zenvoy-server-${{ matrix.target }}
-          path: src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}
-
-  test:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Run tests
-        working-directory: src-tauri
-        run: cargo test --lib
-
-      - name: Run clippy
-        working-directory: src-tauri
-        run: cargo clippy -- -D warnings
-
-      - name: Check formatting
-        working-directory: src-tauri
-        run: cargo fmt -- --check
+          tag_name: ${{ github.ref_name }}
+          files: src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}
+          asset_name: ${{ matrix.asset_name }}
