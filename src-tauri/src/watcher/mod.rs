@@ -1,11 +1,9 @@
-use notify::{RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher, Event, EventKind};
-use parking_lot::Mutex;
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use crate::vault::types::{NoteFolder, VaultChangeEvent};
 use crate::vault::safepath::folder_for_relative_path;
+use crate::vault::types::{NoteFolder, VaultChangeEvent};
 
 const INTERNAL_VAULT_DIR: &str = ".zenvoy";
 const VAULT_SETTINGS_PATH: &str = ".zenvoy/vault.json";
@@ -33,7 +31,11 @@ impl VaultWatcher {
 
         watcher.watch(&root, RecursiveMode::Recursive)?;
 
-        Ok(Self { root, _watcher: watcher, sender })
+        Ok(Self {
+            root,
+            _watcher: watcher,
+            sender,
+        })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<VaultChangeEvent> {
@@ -79,7 +81,8 @@ fn handle_event(root: &Path, event: &Event, tx: &broadcast::Sender<VaultChangeEv
 
         // Note comments
         if rel.starts_with(NOTE_COMMENTS_PREFIX) && rel.ends_with(NOTE_COMMENTS_SUFFIX) {
-            let note_path = &rel[NOTE_COMMENTS_PREFIX.len()..rel.len() - NOTE_COMMENTS_SUFFIX.len()];
+            let note_path =
+                &rel[NOTE_COMMENTS_PREFIX.len()..rel.len() - NOTE_COMMENTS_SUFFIX.len()];
             let folder = folder_for_relative_path(note_path).unwrap_or(NoteFolder::Inbox);
             let _ = tx.send(VaultChangeEvent {
                 kind: kind.to_string(),

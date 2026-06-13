@@ -5,9 +5,9 @@ pub mod routes;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::http::{StatusCode, Uri};
 use axum::Router;
 use parking_lot::RwLock;
 use rust_embed::RustEmbed;
@@ -80,10 +80,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 #[folder = "../dist/"]
 struct StaticAssets;
 
-async fn serve_static(
-    state: Arc<AppState>,
-    uri: Uri,
-) -> impl IntoResponse {
+async fn serve_static(state: Arc<AppState>, uri: Uri) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/');
     if let Some(content) = StaticAssets::get(path) {
         let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -94,7 +91,13 @@ async fn serve_static(
             let html = String::from_utf8_lossy(&content.data);
             let base_path = state.config.read().base_path.clone();
             let html = if !base_path.is_empty() {
-                html.replace("</head>", &format!("<meta name=\"zn-base-path\" content=\"{}\">\n</head>", base_path))
+                html.replace(
+                    "</head>",
+                    &format!(
+                        "<meta name=\"zn-base-path\" content=\"{}\">\n</head>",
+                        base_path
+                    ),
+                )
             } else {
                 html.to_string()
             };

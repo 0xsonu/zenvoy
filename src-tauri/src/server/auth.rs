@@ -24,6 +24,12 @@ pub struct SessionStore {
     sessions: Mutex<HashMap<String, Instant>>,
 }
 
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionStore {
     pub fn new() -> Self {
         Self {
@@ -44,7 +50,7 @@ impl SessionStore {
         let mut sessions = self.sessions.lock();
         let now = Instant::now();
         sessions.retain(|_, exp| *exp > now);
-        sessions.get(token).map_or(false, |exp| *exp > now)
+        sessions.get(token).is_some_and(|exp| *exp > now)
     }
 
     pub fn delete(&self, token: &str) {
@@ -126,7 +132,11 @@ pub async fn require_auth(
         }
     }
 
-    (StatusCode::UNAUTHORIZED, Json(json!({"error": "Unauthorized"}))).into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({"error": "Unauthorized"})),
+    )
+        .into_response()
 }
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
@@ -201,10 +211,7 @@ async fn session_login(
         .into_response()
 }
 
-async fn session_logout(
-    State(state): State<Arc<AppState>>,
-    req: Request,
-) -> Response {
+async fn session_logout(State(state): State<Arc<AppState>>, req: Request) -> Response {
     // Delete session from store if cookie present
     if let Some(cookie_header) = req.headers().get("cookie") {
         if let Ok(cookies) = cookie_header.to_str() {
@@ -239,9 +246,5 @@ async fn session_rotate_token(State(state): State<Arc<AppState>>) -> Response {
 
     state.sessions.delete_all();
 
-    (
-        StatusCode::OK,
-        Json(json!({"token": new_token})),
-    )
-        .into_response()
+    (StatusCode::OK, Json(json!({"token": new_token}))).into_response()
 }

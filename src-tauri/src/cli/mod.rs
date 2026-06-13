@@ -88,9 +88,19 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum FolderAction {
     List,
-    Create { folder: String, subpath: String },
-    Rename { folder: String, old: String, new: String },
-    Delete { folder: String, subpath: String },
+    Create {
+        folder: String,
+        subpath: String,
+    },
+    Rename {
+        folder: String,
+        old: String,
+        new: String,
+    },
+    Delete {
+        folder: String,
+        subpath: String,
+    },
 }
 
 #[derive(Subcommand)]

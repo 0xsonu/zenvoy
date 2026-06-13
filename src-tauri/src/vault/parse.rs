@@ -1,57 +1,42 @@
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
 
-static FENCED_BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?m)(^|\n)```[^\n]*\n[\s\S]*?\n```[ \t]*(?:\n|$)").unwrap()
-});
+static FENCED_BLOCK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)(^|\n)```[^\n]*\n[\s\S]*?\n```[ \t]*(?:\n|$)").unwrap());
 static INLINE_CODE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"`[^`\n]*`").unwrap());
 static TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:^|\s)#([A-Za-z][\w\-/]*)").unwrap());
-static WIKILINK_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(!?)\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]").unwrap()
-});
-static LINK_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(!?)\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#).unwrap()
-});
-static EMBED_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"!\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]").unwrap()
-});
-static FRONTMATTER_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?s)\A---\n(.*?)\n---\n?").unwrap()
-});
+static WIKILINK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(!?)\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]").unwrap());
+static LINK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(!?)\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#).unwrap());
+static EMBED_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"!\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]").unwrap());
+static FRONTMATTER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)\A---\n(.*?)\n---\n?").unwrap());
 static HEADING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^#{1,6}\s+").unwrap());
 static IMAGE_MD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!\[[^\]]*\]\([^)]*\)").unwrap());
 static MD_LINK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[([^\]]+)\]\([^)]*\)").unwrap());
-static MD_EMBED_ALT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").unwrap()
-});
-static MD_WIKI_ALT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").unwrap()
-});
+static MD_EMBED_ALT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").unwrap());
+static MD_WIKI_ALT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").unwrap());
 static MARKUP_TRIM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[*_~>]+").unwrap());
 static WS_COLLAPSE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 static SCHEME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z][a-zA-Z\d+.\-]*:").unwrap());
 
-static TASK_LINE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(\s*(?:[-*+]|\d+\.)\s+)\[( |x|X)\](.*)$").unwrap()
-});
-static INLINE_DUE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|\s)due:(\S+)").unwrap()
-});
-static INLINE_PRIORITY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|\s)!(high|med|medium|low|h|m|l)\b").unwrap()
-});
-static INLINE_WAITING_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|\s)@waiting\b").unwrap()
-});
-static INLINE_TAG_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|\s)#([a-z0-9][a-z0-9/_\-]*)").unwrap()
-});
+static TASK_LINE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(\s*(?:[-*+]|\d+\.)\s+)\[( |x|X)\](.*)$").unwrap());
+static INLINE_DUE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(?:^|\s)due:(\S+)").unwrap());
+static INLINE_PRIORITY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|\s)!(high|med|medium|low|h|m|l)\b").unwrap());
+static INLINE_WAITING_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|\s)@waiting\b").unwrap());
+static INLINE_TAG_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|\s)#([a-z0-9][a-z0-9/_\-]*)").unwrap());
 static ISO_DATE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap());
 
 const ATTACHMENT_EXTS: &[&str] = &[
-    ".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp", ".pdf",
-    ".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav",
-    ".m4v", ".mov", ".mp4", ".ogv", ".webm",
+    ".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp", ".pdf", ".aac", ".flac",
+    ".m4a", ".mp3", ".ogg", ".wav", ".m4v", ".mov", ".mp4", ".ogv", ".webm",
 ];
 
 fn strip_code_content(body: &str) -> String {
@@ -138,16 +123,30 @@ pub fn build_excerpt(body: &str) -> String {
         text = MD_LINK_RE.replace_all(&text, "$1").to_string();
     }
     if text.contains("![[") {
-        text = MD_EMBED_ALT_RE.replace_all(&text, |caps: &regex::Captures| {
-            caps.get(2).map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
-        }).to_string();
+        text = MD_EMBED_ALT_RE
+            .replace_all(&text, |caps: &regex::Captures| {
+                caps.get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| {
+                        caps.get(1)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default()
+                    })
+            })
+            .to_string();
     }
     if text.contains("[[") {
-        text = MD_WIKI_ALT_RE.replace_all(&text, |caps: &regex::Captures| {
-            caps.get(2).map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default())
-        }).to_string();
+        text = MD_WIKI_ALT_RE
+            .replace_all(&text, |caps: &regex::Captures| {
+                caps.get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| {
+                        caps.get(1)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default()
+                    })
+            })
+            .to_string();
     }
     if text.contains('#') {
         text = HEADING_RE.replace_all(&text, "").to_string();
@@ -196,7 +195,9 @@ pub fn parse_tasks(path: &str, title: &str, folder: &NoteFolder, body: &str) -> 
         if in_fence {
             continue;
         }
-        let Some(caps) = TASK_LINE_RE.captures(line) else { continue };
+        let Some(caps) = TASK_LINE_RE.captures(line) else {
+            continue;
+        };
         let checked_char = &caps[2];
         let tail = caps[3].to_string();
         let checked = checked_char == "x" || checked_char == "X";
@@ -229,10 +230,22 @@ pub fn parse_tasks(path: &str, title: &str, folder: &NoteFolder, body: &str) -> 
             }
         }
         stripped = WS_COLLAPSE_RE.replace_all(stripped.trim(), " ").to_string();
-        let content = if stripped.is_empty() { tail.trim().to_string() } else { stripped };
+        let content = if stripped.is_empty() {
+            tail.trim().to_string()
+        } else {
+            stripped
+        };
 
-        let final_due = if due.is_empty() { defaults.due.clone() } else { due };
-        let final_priority = if priority.is_empty() { defaults.priority.clone() } else { priority };
+        let final_due = if due.is_empty() {
+            defaults.due.clone()
+        } else {
+            due
+        };
+        let final_priority = if priority.is_empty() {
+            defaults.priority.clone()
+        } else {
+            priority
+        };
 
         out.push(VaultTask {
             id: format!("{}#{}", path, task_index),
@@ -260,21 +273,28 @@ struct NoteDefaults {
 }
 
 fn parse_note_defaults(body: &str) -> NoteDefaults {
-    let mut defaults = NoteDefaults { due: String::new(), priority: String::new() };
+    let mut defaults = NoteDefaults {
+        due: String::new(),
+        priority: String::new(),
+    };
     if let Some(caps) = FRONTMATTER_RE.captures(body) {
         for line in caps[1].lines() {
             let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
             if let Some(colon) = trimmed.find(':') {
                 let key = trimmed[..colon].trim().to_lowercase();
                 let val = unquote(trimmed[colon + 1..].trim());
                 match key.as_str() {
-                    "due" => {
-                        if ISO_DATE_RE.is_match(&val) { defaults.due = val; }
+                    "due" if ISO_DATE_RE.is_match(&val) => {
+                        defaults.due = val;
                     }
                     "priority" => {
                         let p = normalize_priority(&val);
-                        if !p.is_empty() { defaults.priority = p; }
+                        if !p.is_empty() {
+                            defaults.priority = p;
+                        }
                     }
                     _ => {}
                 }

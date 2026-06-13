@@ -1,7 +1,7 @@
 use clap::Parser;
-use zenvoy_lib::cli::{Cli, Commands, FolderAction, TaskAction, TagAction, VaultAction};
+use zenvoy_lib::cli::{Cli, Commands, FolderAction, TagAction, TaskAction, VaultAction};
 use zenvoy_lib::config::Config;
-use zenvoy_lib::vault::{Vault, VaultOptions, NoteFolder};
+use zenvoy_lib::vault::{NoteFolder, Vault, VaultOptions};
 
 fn main() {
     let cli = Cli::parse();
@@ -11,14 +11,17 @@ fn main() {
     let vault_path = cli.vault.unwrap_or(config.vault_path);
 
     // Some commands don't need a vault
-    match &cli.command {
-        Commands::Mcp => { zenvoy_lib::mcp::run_mcp_server(); return; }
-        _ => {}
+    if let Commands::Mcp = &cli.command {
+        zenvoy_lib::mcp::run_mcp_server();
+        return;
     }
 
     let vault = match Vault::new(&vault_path, VaultOptions::default()) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {}", e); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
     };
 
     if let Err(e) = run_command(&vault, cli.command) {
@@ -40,35 +43,49 @@ fn run_command(vault: &Vault, cmd: Commands) -> Result<(), String> {
             print!("{}", content.body);
         }
         Commands::Create { folder, title } => {
-            let f = NoteFolder::from_str(&folder.unwrap_or("inbox".to_string())).ok_or("invalid folder")?;
-            let meta = vault.create_note(&f, title.as_deref(), None).map_err(|e| e.to_string())?;
+            let f = NoteFolder::parse(&folder.unwrap_or("inbox".to_string()))
+                .ok_or("invalid folder")?;
+            let meta = vault
+                .create_note(&f, title.as_deref(), None)
+                .map_err(|e| e.to_string())?;
             println!("{}", meta.path);
         }
         Commands::Write { path } => {
             let mut body = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|e| e.to_string())?;
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)
+                .map_err(|e| e.to_string())?;
             let meta = vault.write_note(&path, &body).map_err(|e| e.to_string())?;
             println!("{}", meta.path);
         }
         Commands::Append { path } => {
             let mut body = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|e| e.to_string())?;
-            vault.append_to_note(&path, &body, "end").map_err(|e| e.to_string())?;
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)
+                .map_err(|e| e.to_string())?;
+            vault
+                .append_to_note(&path, &body, "end")
+                .map_err(|e| e.to_string())?;
             println!("ok");
         }
         Commands::Prepend { path } => {
             let mut body = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body).map_err(|e| e.to_string())?;
-            vault.append_to_note(&path, &body, "start").map_err(|e| e.to_string())?;
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)
+                .map_err(|e| e.to_string())?;
+            vault
+                .append_to_note(&path, &body, "start")
+                .map_err(|e| e.to_string())?;
             println!("ok");
         }
         Commands::Rename { path, title } => {
-            let meta = vault.rename_note(&path, &title).map_err(|e| e.to_string())?;
+            let meta = vault
+                .rename_note(&path, &title)
+                .map_err(|e| e.to_string())?;
             println!("{}", meta.path);
         }
         Commands::Move { path, folder } => {
-            let f = NoteFolder::from_str(&folder).ok_or("invalid folder")?;
-            let meta = vault.move_note(&path, &f, None).map_err(|e| e.to_string())?;
+            let f = NoteFolder::parse(&folder).ok_or("invalid folder")?;
+            let meta = vault
+                .move_note(&path, &f, None)
+                .map_err(|e| e.to_string())?;
             println!("{}", meta.path);
         }
         Commands::Archive { path } => {
@@ -96,7 +113,9 @@ fn run_command(vault: &Vault, cmd: Commands) -> Result<(), String> {
             println!("{}", meta.path);
         }
         Commands::Search { query } => {
-            let results = vault.search_vault_text(&query, None).map_err(|e| e.to_string())?;
+            let results = vault
+                .search_vault_text(&query, None)
+                .map_err(|e| e.to_string())?;
             for r in results {
                 println!("{}:{}:{}", r.path, r.line_number, r.line_text);
             }
@@ -110,9 +129,17 @@ fn run_command(vault: &Vault, cmd: Commands) -> Result<(), String> {
         }
         Commands::Backlinks { path } => {
             let notes = vault.list_notes().map_err(|e| e.to_string())?;
-            let target_title = notes.iter().find(|n| n.path == path).map(|n| n.title.clone()).unwrap_or_default();
+            let target_title = notes
+                .iter()
+                .find(|n| n.path == path)
+                .map(|n| n.title.clone())
+                .unwrap_or_default();
             for note in &notes {
-                if note.wikilinks.iter().any(|w| w.eq_ignore_ascii_case(&target_title)) {
+                if note
+                    .wikilinks
+                    .iter()
+                    .any(|w| w.eq_ignore_ascii_case(&target_title))
+                {
                     println!("{}\t{}", note.path, note.title);
                 }
             }
@@ -120,24 +147,32 @@ fn run_command(vault: &Vault, cmd: Commands) -> Result<(), String> {
         Commands::Folder { action } => match action {
             FolderAction::List => {
                 let folders = vault.list_folders().map_err(|e| e.to_string())?;
-                for f in folders { println!("{}\t{}", f.folder, f.subpath); }
+                for f in folders {
+                    println!("{}\t{}", f.folder, f.subpath);
+                }
             }
             FolderAction::Create { folder, subpath } => {
-                let f = NoteFolder::from_str(&folder).ok_or("invalid folder")?;
-                vault.create_folder(&f, &subpath).map_err(|e| e.to_string())?;
+                let f = NoteFolder::parse(&folder).ok_or("invalid folder")?;
+                vault
+                    .create_folder(&f, &subpath)
+                    .map_err(|e| e.to_string())?;
                 println!("ok");
             }
             FolderAction::Rename { folder, old, new } => {
-                let f = NoteFolder::from_str(&folder).ok_or("invalid folder")?;
-                let result = vault.rename_folder(&f, &old, &new).map_err(|e| e.to_string())?;
+                let f = NoteFolder::parse(&folder).ok_or("invalid folder")?;
+                let result = vault
+                    .rename_folder(&f, &old, &new)
+                    .map_err(|e| e.to_string())?;
                 println!("{}", result);
             }
             FolderAction::Delete { folder, subpath } => {
-                let f = NoteFolder::from_str(&folder).ok_or("invalid folder")?;
-                vault.delete_folder(&f, &subpath).map_err(|e| e.to_string())?;
+                let f = NoteFolder::parse(&folder).ok_or("invalid folder")?;
+                vault
+                    .delete_folder(&f, &subpath)
+                    .map_err(|e| e.to_string())?;
                 println!("ok");
             }
-        }
+        },
         Commands::Task { action } => match action {
             TaskAction::List => {
                 let tasks = vault.scan_tasks().map_err(|e| e.to_string())?;
@@ -149,13 +184,20 @@ fn run_command(vault: &Vault, cmd: Commands) -> Result<(), String> {
             TaskAction::Toggle { id } => {
                 println!("toggle {}", id);
             }
-        }
+        },
         Commands::Tag { action } => match action {
             TagAction::List => {
                 let notes = vault.list_notes().map_err(|e| e.to_string())?;
-                let mut tags: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-                for note in &notes { for tag in &note.tags { tags.insert(tag.clone()); } }
-                for tag in tags { println!("#{}", tag); }
+                let mut tags: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
+                for note in &notes {
+                    for tag in &note.tags {
+                        tags.insert(tag.clone());
+                    }
+                }
+                for tag in tags {
+                    println!("#{}", tag);
+                }
             }
             TagAction::Find { tag } => {
                 let notes = vault.list_notes().map_err(|e| e.to_string())?;
@@ -163,7 +205,7 @@ fn run_command(vault: &Vault, cmd: Commands) -> Result<(), String> {
                     println!("{}\t{}", note.path, note.title);
                 }
             }
-        }
+        },
         Commands::Vault { action } => match action {
             VaultAction::Info => {
                 let info = vault.info();
@@ -172,12 +214,16 @@ fn run_command(vault: &Vault, cmd: Commands) -> Result<(), String> {
             VaultAction::List => {
                 println!("{}", vault.info().root);
             }
-        }
+        },
         Commands::Capture { body } => {
             let content = body.unwrap_or_default();
-            let meta = vault.create_note(&NoteFolder::Quick, None, None).map_err(|e| e.to_string())?;
+            let meta = vault
+                .create_note(&NoteFolder::Quick, None, None)
+                .map_err(|e| e.to_string())?;
             if !content.is_empty() {
-                vault.write_note(&meta.path, &content).map_err(|e| e.to_string())?;
+                vault
+                    .write_note(&meta.path, &content)
+                    .map_err(|e| e.to_string())?;
             }
             println!("{}", meta.path);
         }

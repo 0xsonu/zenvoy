@@ -1,5 +1,5 @@
-use std::path::{Component, Path, PathBuf};
 use super::VaultError;
+use std::path::{Component, Path, PathBuf};
 
 /// Validate and resolve a relative path within the vault root.
 /// Prevents directory traversal attacks.
@@ -31,7 +31,7 @@ pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, VaultError> {
 pub fn folder_for_relative_path(rel: &str) -> Option<super::types::NoteFolder> {
     let normalized = rel.replace('\\', "/");
     let top = normalized.split('/').next().unwrap_or("");
-    super::types::NoteFolder::from_str(top)
+    super::types::NoteFolder::parse(top)
 }
 
 #[cfg(test)]
@@ -63,10 +63,22 @@ mod tests {
     #[test]
     fn test_folder_for_relative_path() {
         use super::super::types::NoteFolder;
-        assert_eq!(folder_for_relative_path("inbox/test.md"), Some(NoteFolder::Inbox));
-        assert_eq!(folder_for_relative_path("trash/old.md"), Some(NoteFolder::Trash));
-        assert_eq!(folder_for_relative_path("archive/done.md"), Some(NoteFolder::Archive));
-        assert_eq!(folder_for_relative_path("quick/fast.md"), Some(NoteFolder::Quick));
+        assert_eq!(
+            folder_for_relative_path("inbox/test.md"),
+            Some(NoteFolder::Inbox)
+        );
+        assert_eq!(
+            folder_for_relative_path("trash/old.md"),
+            Some(NoteFolder::Trash)
+        );
+        assert_eq!(
+            folder_for_relative_path("archive/done.md"),
+            Some(NoteFolder::Archive)
+        );
+        assert_eq!(
+            folder_for_relative_path("quick/fast.md"),
+            Some(NoteFolder::Quick)
+        );
         assert_eq!(folder_for_relative_path("random/thing.md"), None);
     }
 }

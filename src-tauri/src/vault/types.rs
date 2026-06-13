@@ -20,7 +20,7 @@ impl NoteFolder {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "inbox" => Some(Self::Inbox),
             "quick" => Some(Self::Quick),

@@ -1,11 +1,11 @@
-pub mod types;
-pub mod safepath;
 pub mod parse;
+pub mod safepath;
+pub mod types;
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use parking_lot::RwLock;
 use thiserror::Error;
 
 pub use types::*;
@@ -17,14 +17,45 @@ const NOTE_COMMENTS_DIR: &str = "comments";
 const WELCOME_NOTE: &str = "# Welcome to Zenvoy\n\nThis is your first note. Start writing!\n";
 
 static RESERVED_ROOT_NAMES: &[&str] = &[
-    "inbox", "quick", "archive", "trash", "attachements", "_assets", ".zenvoy",
+    "inbox",
+    "quick",
+    "archive",
+    "trash",
+    "attachements",
+    "_assets",
+    ".zenvoy",
 ];
 
 static VALID_FOLDER_ICON_IDS: &[&str] = &[
-    "folder", "bolt", "tray", "archive", "trash", "book", "bookmark", "calendar",
-    "briefcase", "tag", "document", "sparkle", "code", "user", "star", "heart",
-    "link", "lightbulb", "flask", "graduation", "music", "image", "palette",
-    "terminal", "wrench", "globe", "map", "chart", "home",
+    "folder",
+    "bolt",
+    "tray",
+    "archive",
+    "trash",
+    "book",
+    "bookmark",
+    "calendar",
+    "briefcase",
+    "tag",
+    "document",
+    "sparkle",
+    "code",
+    "user",
+    "star",
+    "heart",
+    "link",
+    "lightbulb",
+    "flask",
+    "graduation",
+    "music",
+    "image",
+    "palette",
+    "terminal",
+    "wrench",
+    "globe",
+    "map",
+    "chart",
+    "home",
 ];
 
 #[derive(Error, Debug)]
@@ -51,8 +82,8 @@ pub type VaultResult<T> = Result<T, VaultError>;
 
 pub struct Vault {
     root: PathBuf,
-    file_mode: u32,
-    dir_mode: u32,
+    _file_mode: u32,
+    _dir_mode: u32,
     max_asset_bytes: i64,
     meta_cache: RwLock<HashMap<String, NoteMetaCacheEntry>>,
 }
@@ -68,14 +99,26 @@ impl Vault {
         let root_path = root.as_ref();
         fs::create_dir_all(root_path)?;
         let abs = fs::canonicalize(root_path)?;
-        let file_mode = if opts.file_mode == 0 { 0o600 } else { opts.file_mode };
-        let dir_mode = if opts.dir_mode == 0 { 0o700 } else { opts.dir_mode };
-        let max_asset_bytes = if opts.max_asset_bytes <= 0 { 50 << 20 } else { opts.max_asset_bytes };
+        let file_mode = if opts.file_mode == 0 {
+            0o600
+        } else {
+            opts.file_mode
+        };
+        let dir_mode = if opts.dir_mode == 0 {
+            0o700
+        } else {
+            opts.dir_mode
+        };
+        let max_asset_bytes = if opts.max_asset_bytes <= 0 {
+            50 << 20
+        } else {
+            opts.max_asset_bytes
+        };
 
         let vault = Self {
             root: abs,
-            file_mode,
-            dir_mode,
+            _file_mode: file_mode,
+            _dir_mode: dir_mode,
             max_asset_bytes,
             meta_cache: RwLock::new(HashMap::new()),
         };
@@ -90,7 +133,9 @@ impl Vault {
     pub fn info(&self) -> VaultInfo {
         VaultInfo {
             root: self.root.to_string_lossy().to_string(),
-            name: self.root.file_name()
+            name: self
+                .root
+                .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default(),
         }
@@ -111,8 +156,12 @@ impl Vault {
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') { continue; }
-            if RESERVED_ROOT_NAMES.contains(&name.as_str()) { continue; }
+            if name.starts_with('.') {
+                continue;
+            }
+            if RESERVED_ROOT_NAMES.contains(&name.as_str()) {
+                continue;
+            }
             if entry.path().is_dir() || name.to_lowercase().ends_with(".md") {
                 return "root".to_string();
             }
@@ -127,7 +176,9 @@ impl Vault {
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || name == INTERNAL_VAULT_DIR { continue; }
+            if name.starts_with('.') || name == INTERNAL_VAULT_DIR {
+                continue;
+            }
             return false;
         }
         true
@@ -141,9 +192,10 @@ impl Vault {
                 let settings: VaultSettings = serde_json::from_str(&raw)?;
                 Ok(normalize_vault_settings(settings, &fallback))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(normalize_vault_settings(VaultSettings::default(), &fallback))
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(normalize_vault_settings(
+                VaultSettings::default(),
+                &fallback,
+            )),
             Err(e) => Err(VaultError::Io(e)),
         }
     }
@@ -189,7 +241,12 @@ impl Vault {
         let settings = self.get_settings()?;
 
         // Create system folders
-        for folder in &[NoteFolder::Inbox, NoteFolder::Quick, NoteFolder::Archive, NoteFolder::Trash] {
+        for folder in &[
+            NoteFolder::Inbox,
+            NoteFolder::Quick,
+            NoteFolder::Archive,
+            NoteFolder::Trash,
+        ] {
             if *folder == NoteFolder::Inbox && settings.primary_notes_location == "root" {
                 continue;
             }
@@ -219,7 +276,12 @@ impl Vault {
 
     pub fn list_notes(&self) -> VaultResult<Vec<NoteMeta>> {
         let settings = self.get_settings()?;
-        let folders = [NoteFolder::Inbox, NoteFolder::Quick, NoteFolder::Archive, NoteFolder::Trash];
+        let folders = [
+            NoteFolder::Inbox,
+            NoteFolder::Quick,
+            NoteFolder::Archive,
+            NoteFolder::Trash,
+        ];
         let mut all = Vec::new();
 
         for folder in &folders {
@@ -227,7 +289,8 @@ impl Vault {
             if !base.is_dir() {
                 continue;
             }
-            let is_root_inbox = *folder == NoteFolder::Inbox && settings.primary_notes_location == "root";
+            let is_root_inbox =
+                *folder == NoteFolder::Inbox && settings.primary_notes_location == "root";
             let mut dir_indices: HashMap<PathBuf, i32> = HashMap::new();
 
             self.walk_dir(&base, folder, is_root_inbox, &mut dir_indices, &mut all)?;
@@ -244,7 +307,7 @@ impl Vault {
         out: &mut Vec<NoteMeta>,
     ) -> VaultResult<()> {
         let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
-        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        entries.sort_by_key(|a| a.file_name());
 
         for entry in entries {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -290,15 +353,28 @@ impl Vault {
         let folder = self.folder_of(&abs);
         let mut meta = self.read_meta(&folder, &abs)?;
         // Use filename stem as title for write_note
-        meta.title = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        meta.title = abs
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         Ok(meta)
     }
 
-    pub fn create_note(&self, folder: &NoteFolder, title: Option<&str>, subpath: Option<&str>) -> VaultResult<NoteMeta> {
+    pub fn create_note(
+        &self,
+        folder: &NoteFolder,
+        title: Option<&str>,
+        subpath: Option<&str>,
+    ) -> VaultResult<NoteMeta> {
         let stem = match title {
             Some(t) => {
                 let s = sanitize_file_stem(t);
-                if s.is_empty() { default_title() } else { s }
+                if s.is_empty() {
+                    default_title()
+                } else {
+                    s
+                }
             }
             None => default_title(),
         };
@@ -321,7 +397,11 @@ impl Vault {
             return Err(VaultError::NotFound(rel.to_string()));
         }
         let stem = sanitize_file_stem(next_title);
-        let stem = if stem.is_empty() { default_title() } else { stem };
+        let stem = if stem.is_empty() {
+            default_title()
+        } else {
+            stem
+        };
         let dir = abs.parent().unwrap();
         let dest = unique_path(dir, &stem, "md");
         fs::rename(&abs, &dest)?;
@@ -329,15 +409,29 @@ impl Vault {
         let folder = self.folder_of(&dest);
         let mut meta = self.read_meta(&folder, &dest)?;
         // Use the intended title (from filename stem) rather than body heading
-        meta.title = dest.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        meta.title = dest
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         self.rewrite_inbound_wikilinks(&notes_before, rel, next_title);
         Ok(meta)
     }
 
-    pub fn rewrite_inbound_wikilinks(&self, notes_before: &[NoteMeta], old_path: &str, new_title: &str) {
-        let notes: Vec<_> = notes_before.iter().filter(|n| n.folder != NoteFolder::Trash).collect();
+    pub fn rewrite_inbound_wikilinks(
+        &self,
+        notes_before: &[NoteMeta],
+        old_path: &str,
+        new_title: &str,
+    ) {
+        let notes: Vec<_> = notes_before
+            .iter()
+            .filter(|n| n.folder != NoteFolder::Trash)
+            .collect();
         for note in &notes {
-            if note.path == old_path { continue; }
+            if note.path == old_path {
+                continue;
+            }
             let abs = match safepath::safe_join(&self.root, &note.path) {
                 Ok(p) => p,
                 Err(_) => continue,
@@ -346,7 +440,8 @@ impl Vault {
                 Ok(b) => b,
                 Err(_) => continue,
             };
-            let (new_body, count) = rewrite_wikilinks_for_rename(&body, notes_before, old_path, new_title);
+            let (new_body, count) =
+                rewrite_wikilinks_for_rename(&body, notes_before, old_path, new_title);
             if count > 0 {
                 let _ = fs::write(&abs, new_body);
             }
@@ -427,12 +522,21 @@ impl Vault {
         self.move_between_folders(rel, &NoteFolder::Inbox)
     }
 
-    pub fn move_note(&self, rel: &str, target: &NoteFolder, target_subpath: Option<&str>) -> VaultResult<NoteMeta> {
+    pub fn move_note(
+        &self,
+        rel: &str,
+        target: &NoteFolder,
+        target_subpath: Option<&str>,
+    ) -> VaultResult<NoteMeta> {
         let abs = safepath::safe_join(&self.root, rel)?;
         if !abs.is_file() {
             return Err(VaultError::NotFound(rel.to_string()));
         }
-        let stem = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let stem = abs
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let target_root = self.folder_root(target)?;
         let dest_dir = match target_subpath {
             Some(sp) if !sp.is_empty() => target_root.join(sp),
@@ -450,7 +554,11 @@ impl Vault {
         if !abs.is_file() {
             return Err(VaultError::NotFound(rel.to_string()));
         }
-        let stem = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let stem = abs
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let subpath = self.folder_subpath_of(&abs);
         let target_root = self.folder_root(target)?;
         let dest_dir = if subpath.is_empty() {
@@ -467,7 +575,10 @@ impl Vault {
 
     fn folder_subpath_of(&self, abs: &Path) -> String {
         let rel = abs.strip_prefix(&self.root).unwrap_or(abs);
-        let components: Vec<_> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+        let components: Vec<_> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
         // components: [folder, ...subpath..., filename]
         if components.len() <= 2 {
             return String::new();
@@ -485,11 +596,13 @@ impl Vault {
     fn read_meta(&self, folder: &NoteFolder, abs_path: &Path) -> VaultResult<NoteMeta> {
         let key = abs_path.to_string_lossy().to_string();
         let fs_meta = fs::metadata(abs_path)?;
-        let mtime_ms = fs_meta.modified()
+        let mtime_ms = fs_meta
+            .modified()
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs_f64() * 1000.0;
+            .as_secs_f64()
+            * 1000.0;
 
         {
             let cache = self.meta_cache.read();
@@ -515,14 +628,21 @@ impl Vault {
             {
                 use std::os::unix::fs::MetadataExt;
                 let ct = fs_meta.ctime();
-                if ct > 0 { ct } else { updated_at }
+                if ct > 0 {
+                    ct
+                } else {
+                    updated_at
+                }
             }
             #[cfg(not(unix))]
-            { updated_at }
+            {
+                updated_at
+            }
         };
 
         let rel = abs_path.strip_prefix(&self.root).unwrap_or(abs_path);
-        let path = rel.components()
+        let path = rel
+            .components()
             .map(|c| c.as_os_str().to_string_lossy().to_string())
             .collect::<Vec<_>>()
             .join("/");
@@ -543,26 +663,44 @@ impl Vault {
 
         {
             let mut cache = self.meta_cache.write();
-            cache.insert(key, NoteMetaCacheEntry { mtime_ms, _size: size, meta: meta.clone() });
+            cache.insert(
+                key,
+                NoteMetaCacheEntry {
+                    mtime_ms,
+                    _size: size,
+                    meta: meta.clone(),
+                },
+            );
         }
         Ok(meta)
     }
 
     pub fn list_folders(&self) -> VaultResult<Vec<FolderEntry>> {
         let settings = self.get_settings()?;
-        let folders = [NoteFolder::Inbox, NoteFolder::Quick, NoteFolder::Archive, NoteFolder::Trash];
+        let folders = [
+            NoteFolder::Inbox,
+            NoteFolder::Quick,
+            NoteFolder::Archive,
+            NoteFolder::Trash,
+        ];
         let mut result: Vec<FolderEntry> = Vec::new();
 
         for folder in &folders {
             let base = self.folder_root(folder)?;
-            if !base.is_dir() { continue; }
-            let is_root_inbox = *folder == NoteFolder::Inbox && settings.primary_notes_location == "root";
+            if !base.is_dir() {
+                continue;
+            }
+            let is_root_inbox =
+                *folder == NoteFolder::Inbox && settings.primary_notes_location == "root";
             self.walk_folders(&base, &base, folder, is_root_inbox, &mut result)?;
         }
 
         // Sort by folder then subpath
         result.sort_by(|a, b| {
-            a.folder.as_str().cmp(b.folder.as_str()).then(a.subpath.cmp(&b.subpath))
+            a.folder
+                .as_str()
+                .cmp(b.folder.as_str())
+                .then(a.subpath.cmp(&b.subpath))
         });
 
         // Assign sibling_order per parent directory within each folder
@@ -591,15 +729,25 @@ impl Vault {
         out: &mut Vec<FolderEntry>,
     ) -> VaultResult<()> {
         let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
-        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        entries.sort_by_key(|a| a.file_name());
 
         for entry in entries {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') { continue; }
+            if name.starts_with('.') {
+                continue;
+            }
             let path = entry.path();
-            if !path.is_dir() { continue; }
-            if skip_reserved && RESERVED_ROOT_NAMES.contains(&name.as_str()) { continue; }
-            let subpath = path.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+            if !path.is_dir() {
+                continue;
+            }
+            if skip_reserved && RESERVED_ROOT_NAMES.contains(&name.as_str()) {
+                continue;
+            }
+            let subpath = path
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             out.push(FolderEntry {
                 folder: folder.clone(),
                 subpath,
@@ -617,7 +765,12 @@ impl Vault {
         Ok(())
     }
 
-    pub fn rename_folder(&self, folder: &NoteFolder, old_subpath: &str, new_subpath: &str) -> VaultResult<String> {
+    pub fn rename_folder(
+        &self,
+        folder: &NoteFolder,
+        old_subpath: &str,
+        new_subpath: &str,
+    ) -> VaultResult<String> {
         let base = self.folder_root(folder)?;
         let old_path = safepath::safe_join(&base, old_subpath)?;
         let new_path = safepath::safe_join(&base, new_subpath)?;
@@ -627,7 +780,12 @@ impl Vault {
         fs::rename(&old_path, &new_path)?;
         // Update folder icons
         let mut settings = self.get_settings()?;
-        settings.folder_icons = rewrite_folder_icons_for_rename(&settings.folder_icons, folder, old_subpath, new_subpath);
+        settings.folder_icons = rewrite_folder_icons_for_rename(
+            &settings.folder_icons,
+            folder,
+            old_subpath,
+            new_subpath,
+        );
         self.set_settings(settings)?;
         Ok(new_subpath.to_string())
     }
@@ -651,7 +809,11 @@ impl Vault {
         let parent = src.parent().unwrap();
         let dest = unique_dir(parent, &copy_name);
         copy_dir(&src, &dest)?;
-        let new_subpath = dest.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/");
+        let new_subpath = dest
+            .strip_prefix(&base)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
         Ok(new_subpath)
     }
 
@@ -664,7 +826,11 @@ impl Vault {
         }
     }
 
-    pub fn search_vault_text(&self, query: &str, _backend: Option<&str>) -> VaultResult<Vec<TextSearchMatch>> {
+    pub fn search_vault_text(
+        &self,
+        query: &str,
+        _backend: Option<&str>,
+    ) -> VaultResult<Vec<TextSearchMatch>> {
         const MAX_RESULTS: usize = 200;
         if which_exists("rg") {
             if let Ok(results) = self.search_with_ripgrep(query, MAX_RESULTS) {
@@ -676,26 +842,64 @@ impl Vault {
 
     fn search_with_ripgrep(&self, query: &str, max: usize) -> VaultResult<Vec<TextSearchMatch>> {
         let output = std::process::Command::new("rg")
-            .args(["--no-heading", "-n", "--color", "never", "-g", "*.md", "--", query])
+            .args([
+                "--no-heading",
+                "-n",
+                "--color",
+                "never",
+                "-g",
+                "*.md",
+                "--",
+                query,
+            ])
             .arg(&self.root)
             .output()?;
         let mut results = Vec::new();
         let query_lower = query.to_lowercase();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            if results.len() >= max { break; }
+            if results.len() >= max {
+                break;
+            }
             // Format: <filepath>:<line_number>:<line_text>
-            let Some((file_path, rest)) = line.split_once(':') else { continue };
-            let Some((line_num_str, line_text)) = rest.split_once(':') else { continue };
-            let Ok(line_number) = line_num_str.parse::<i32>() else { continue };
+            let Some((file_path, rest)) = line.split_once(':') else {
+                continue;
+            };
+            let Some((line_num_str, line_text)) = rest.split_once(':') else {
+                continue;
+            };
+            let Ok(line_number) = line_num_str.parse::<i32>() else {
+                continue;
+            };
             let rel = match Path::new(file_path).strip_prefix(&self.root) {
-                Ok(r) => r.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/"),
+                Ok(r) => r
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join("/"),
                 Err(_) => continue,
             };
-            if rel.starts_with("trash/") { continue; }
-            let title = Path::new(file_path).file_stem().unwrap_or_default().to_string_lossy().to_string();
+            if rel.starts_with("trash/") {
+                continue;
+            }
+            let title = Path::new(file_path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let folder = safepath::folder_for_relative_path(&rel).unwrap_or(NoteFolder::Inbox);
-            let offset = line_text.to_lowercase().find(&query_lower).map(|i| i as i32).unwrap_or(0);
-            results.push(TextSearchMatch { path: rel, title, folder, line_number, offset, line_text: line_text.to_string() });
+            let offset = line_text
+                .to_lowercase()
+                .find(&query_lower)
+                .map(|i| i as i32)
+                .unwrap_or(0);
+            results.push(TextSearchMatch {
+                path: rel,
+                title,
+                folder,
+                line_number,
+                offset,
+                line_text: line_text.to_string(),
+            });
         }
         Ok(results)
     }
@@ -705,15 +909,25 @@ impl Vault {
         let query_lower = query.to_lowercase();
         let mut results = Vec::new();
         for note in &notes {
-            if note.folder == NoteFolder::Trash { continue; }
-            if results.len() >= max { break; }
+            if note.folder == NoteFolder::Trash {
+                continue;
+            }
+            if results.len() >= max {
+                break;
+            }
             let content = self.read_note(&note.path)?;
             for (i, line) in content.body.lines().enumerate() {
-                if results.len() >= max { break; }
+                if results.len() >= max {
+                    break;
+                }
                 if let Some(offset) = line.to_lowercase().find(&query_lower) {
                     results.push(TextSearchMatch {
                         path: note.path.clone(),
-                        title: Path::new(&note.path).file_stem().unwrap_or_default().to_string_lossy().to_string(),
+                        title: Path::new(&note.path)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
                         folder: note.folder.clone(),
                         line_number: (i + 1) as i32,
                         offset: offset as i32,
@@ -729,16 +943,28 @@ impl Vault {
         let notes = self.list_notes()?;
         let mut tasks = Vec::new();
         for note in &notes {
-            if note.folder == NoteFolder::Trash { continue; }
+            if note.folder == NoteFolder::Trash {
+                continue;
+            }
             let content = self.read_note(&note.path)?;
-            tasks.extend(parse::parse_tasks(&note.path, &note.title, &note.folder, &content.body));
+            tasks.extend(parse::parse_tasks(
+                &note.path,
+                &note.title,
+                &note.folder,
+                &content.body,
+            ));
         }
         Ok(tasks)
     }
 
     pub fn scan_tasks_for_path(&self, rel: &str) -> VaultResult<Vec<VaultTask>> {
         let content = self.read_note(rel)?;
-        Ok(parse::parse_tasks(&content.meta.path, &content.meta.title, &content.meta.folder, &content.body))
+        Ok(parse::parse_tasks(
+            &content.meta.path,
+            &content.meta.title,
+            &content.meta.folder,
+            &content.body,
+        ))
     }
 
     // --- Comments ---
@@ -753,7 +979,10 @@ impl Vault {
             Ok(raw) => {
                 let wrapper: serde_json::Value = serde_json::from_str(&raw)?;
                 let comments: Vec<NoteComment> = serde_json::from_value(
-                    wrapper.get("comments").cloned().unwrap_or(serde_json::Value::Array(vec![]))
+                    wrapper
+                        .get("comments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Array(vec![])),
                 )?;
                 Ok(normalize_comments(comments, rel))
             }
@@ -762,7 +991,11 @@ impl Vault {
         }
     }
 
-    pub fn write_note_comments(&self, rel: &str, comments: Vec<NoteComment>) -> VaultResult<Vec<NoteComment>> {
+    pub fn write_note_comments(
+        &self,
+        rel: &str,
+        comments: Vec<NoteComment>,
+    ) -> VaultResult<Vec<NoteComment>> {
         let path = self.comments_path_for(rel);
         let normalized = normalize_comments(comments, rel);
         if normalized.is_empty() {
@@ -789,13 +1022,13 @@ impl Vault {
                 self.walk_assets(&dir, &mut assets)?;
             }
         }
-        assets.sort_by(|a: &AssetMeta, b: &AssetMeta| b.updated_at.cmp(&a.updated_at));
+        assets.sort_by_key(|a| std::cmp::Reverse(a.updated_at));
         Ok(assets)
     }
 
     fn walk_assets(&self, dir: &Path, out: &mut Vec<AssetMeta>) -> VaultResult<()> {
         let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
-        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        entries.sort_by_key(|a| a.file_name());
         let mut idx = 0i32;
         for entry in entries {
             let path = entry.path();
@@ -803,13 +1036,27 @@ impl Vault {
                 self.walk_assets(&path, out)?;
             } else {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.to_lowercase().ends_with(".md") { continue; }
-                let ext = path.extension().unwrap_or_default().to_string_lossy().to_string();
+                if name.to_lowercase().ends_with(".md") {
+                    continue;
+                }
+                let ext = path
+                    .extension()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let rel = path.strip_prefix(&self.root).unwrap();
-                let rel_str = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+                let rel_str = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 let m = fs::metadata(&path)?;
-                let mtime_ms = m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                let mtime_ms = m
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64;
                 out.push(AssetMeta {
                     path: rel_str,
                     name,
@@ -824,7 +1071,11 @@ impl Vault {
         Ok(())
     }
 
-    pub fn import_files_to_note(&self, _note_path: &str, source_paths: &[String]) -> VaultResult<Vec<ImportedAsset>> {
+    pub fn import_files_to_note(
+        &self,
+        _note_path: &str,
+        source_paths: &[String],
+    ) -> VaultResult<Vec<ImportedAsset>> {
         let dest_dir = self.root.join("attachements");
         fs::create_dir_all(&dest_dir)?;
         let mut results = Vec::new();
@@ -834,9 +1085,21 @@ impl Vault {
             if m.len() as i64 > self.max_asset_bytes {
                 return Err(VaultError::AssetTooLarge);
             }
-            let original_name = src_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let stem = src_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-            let ext = src_path.extension().unwrap_or_default().to_string_lossy().to_string();
+            let original_name = src_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let stem = src_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let ext = src_path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let dest = if ext.is_empty() {
                 unique_path(&dest_dir, &stem, "bin")
             } else {
@@ -851,7 +1114,11 @@ impl Vault {
                 format!("[{}](../attachements/{})", original_name, dest_name)
             };
             let rel = dest.strip_prefix(&self.root).unwrap();
-            let rel_str = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+            let rel_str = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join("/");
             results.push(ImportedAsset {
                 name: dest_name,
                 path: rel_str,
@@ -889,8 +1156,16 @@ impl Vault {
         if !abs.is_file() {
             return Err(VaultError::NotFound(rel.to_string()));
         }
-        let stem = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        let ext = abs.extension().unwrap_or_default().to_string_lossy().to_string();
+        let stem = abs
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let ext = abs
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let copy_stem = format!("{} copy", stem);
         let dest = unique_path(abs.parent().unwrap(), &copy_stem, &ext);
         fs::copy(&abs, &dest)?;
@@ -904,11 +1179,25 @@ impl Vault {
         }
         let data = fs::read(&abs)?;
         let name = abs.file_name().unwrap().to_string_lossy().to_string();
-        let ext = abs.extension().unwrap_or_default().to_string_lossy().to_string();
-        let rel_str = abs.strip_prefix(&self.root).unwrap().components()
-            .map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+        let ext = abs
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let rel_str = abs
+            .strip_prefix(&self.root)
+            .unwrap()
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("/");
         fs::remove_file(&abs)?;
-        Ok(DeletedAsset { path: rel_str, name, kind: kind_for_ext(&ext).to_string(), data })
+        Ok(DeletedAsset {
+            path: rel_str,
+            name,
+            kind: kind_for_ext(&ext).to_string(),
+            data,
+        })
     }
 
     pub fn restore_deleted_asset(&self, asset: &DeletedAsset) -> VaultResult<AssetMeta> {
@@ -923,12 +1212,31 @@ impl Vault {
     fn asset_meta(&self, abs: &Path) -> VaultResult<AssetMeta> {
         let m = fs::metadata(abs)?;
         let name = abs.file_name().unwrap().to_string_lossy().to_string();
-        let ext = abs.extension().unwrap_or_default().to_string_lossy().to_string();
+        let ext = abs
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let rel = abs.strip_prefix(&self.root).unwrap();
-        let rel_str = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
-        let mtime_ms = m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-            .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
-        Ok(AssetMeta { path: rel_str, name, kind: kind_for_ext(&ext).to_string(), sibling_order: 0, size: m.len() as i64, updated_at: mtime_ms })
+        let rel_str = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("/");
+        let mtime_ms = m
+            .modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        Ok(AssetMeta {
+            path: rel_str,
+            name,
+            kind: kind_for_ext(&ext).to_string(),
+            sibling_order: 0,
+            size: m.len() as i64,
+            updated_at: mtime_ms,
+        })
     }
 
     // --- Database (CSV) operations ---
@@ -945,8 +1253,17 @@ impl Vault {
             self.infer_sidecar_from_csv(&abs)?
         };
         let rows = self.read_csv_rows(&abs)?;
-        let title = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        Ok(DatabaseDoc { sidecar, path: rel.to_string(), title, rows })
+        let title = abs
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        Ok(DatabaseDoc {
+            sidecar,
+            path: rel.to_string(),
+            title,
+            rows,
+        })
     }
 
     pub fn write_database_rows(&self, rel: &str, rows: Vec<DbRow>) -> VaultResult<DatabaseDoc> {
@@ -961,7 +1278,12 @@ impl Vault {
         self.open_database(rel)
     }
 
-    pub fn write_database_schema(&self, rel: &str, sidecar: DatabaseSidecar, rows: Vec<DbRow>) -> VaultResult<DatabaseDoc> {
+    pub fn write_database_schema(
+        &self,
+        rel: &str,
+        sidecar: DatabaseSidecar,
+        rows: Vec<DbRow>,
+    ) -> VaultResult<DatabaseDoc> {
         let abs = safepath::safe_join(&self.root, rel)?;
         let sidecar_path = PathBuf::from(format!("{}.base.json", abs.display()));
         fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)?;
@@ -969,11 +1291,24 @@ impl Vault {
         self.open_database(rel)
     }
 
-    pub fn create_database(&self, folder: &NoteFolder, subpath: &str, title: Option<&str>) -> VaultResult<DatabaseDoc> {
-        let stem = title.map(|t| sanitize_file_stem(t)).unwrap_or_else(default_title);
-        let stem = if stem.is_empty() { default_title() } else { stem };
+    pub fn create_database(
+        &self,
+        folder: &NoteFolder,
+        subpath: &str,
+        title: Option<&str>,
+    ) -> VaultResult<DatabaseDoc> {
+        let stem = title.map(sanitize_file_stem).unwrap_or_else(default_title);
+        let stem = if stem.is_empty() {
+            default_title()
+        } else {
+            stem
+        };
         let base = self.folder_root(folder)?;
-        let dir = if subpath.is_empty() { base } else { base.join(subpath) };
+        let dir = if subpath.is_empty() {
+            base
+        } else {
+            base.join(subpath)
+        };
         fs::create_dir_all(&dir)?;
         let csv_path = unique_path(&dir, &stem, "csv");
         let sidecar_path = PathBuf::from(format!("{}.base.json", csv_path.display()));
@@ -987,23 +1322,55 @@ impl Vault {
         wtr.write_record(&headers)?;
         wtr.flush()?;
 
-        let rel = csv_path.strip_prefix(&self.root).unwrap()
-            .components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
-        let title_str = csv_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        Ok(DatabaseDoc { sidecar, path: rel, title: title_str, rows: vec![] })
+        let rel = csv_path
+            .strip_prefix(&self.root)
+            .unwrap()
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("/");
+        let title_str = csv_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        Ok(DatabaseDoc {
+            sidecar,
+            path: rel,
+            title: title_str,
+            rows: vec![],
+        })
     }
 
-    pub fn create_record_page(&self, csv_path: &str, title: &str, body: &str) -> VaultResult<String> {
+    pub fn create_record_page(
+        &self,
+        csv_path: &str,
+        title: &str,
+        body: &str,
+    ) -> VaultResult<String> {
         let abs = safepath::safe_join(&self.root, csv_path)?;
-        let db_name = abs.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let db_name = abs
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let dir = abs.parent().unwrap().join(&db_name);
         fs::create_dir_all(&dir)?;
         let stem = sanitize_file_stem(title);
-        let stem = if stem.is_empty() { default_title() } else { stem };
+        let stem = if stem.is_empty() {
+            default_title()
+        } else {
+            stem
+        };
         let dest = unique_path(&dir, &stem, "md");
         fs::write(&dest, body)?;
-        let rel = dest.strip_prefix(&self.root).unwrap()
-            .components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
+        let rel = dest
+            .strip_prefix(&self.root)
+            .unwrap()
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("/");
         Ok(rel)
     }
 
@@ -1012,13 +1379,20 @@ impl Vault {
         let mut result = Vec::new();
         for folder in &folders {
             let base = self.folder_root(folder)?;
-            if !base.is_dir() { continue; }
+            if !base.is_dir() {
+                continue;
+            }
             self.walk_csv(&base, folder, &mut result)?;
         }
         Ok(result)
     }
 
-    fn walk_csv(&self, dir: &Path, folder: &NoteFolder, out: &mut Vec<DatabaseSummary>) -> VaultResult<()> {
+    fn walk_csv(
+        &self,
+        dir: &Path,
+        folder: &NoteFolder,
+        out: &mut Vec<DatabaseSummary>,
+    ) -> VaultResult<()> {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return Ok(()),
@@ -1029,10 +1403,24 @@ impl Vault {
                 self.walk_csv(&path, folder, out)?;
             } else if path.extension().map(|e| e == "csv").unwrap_or(false) {
                 let row_count = self.count_csv_rows(&path);
-                let rel = path.strip_prefix(&self.root).unwrap()
-                    .components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
-                let title = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-                out.push(DatabaseSummary { path: rel, title, folder: folder.clone(), row_count });
+                let rel = path
+                    .strip_prefix(&self.root)
+                    .unwrap()
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let title = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                out.push(DatabaseSummary {
+                    path: rel,
+                    title,
+                    folder: folder.clone(),
+                    row_count,
+                });
             }
         }
         Ok(())
@@ -1064,12 +1452,20 @@ impl Vault {
         Ok(rows)
     }
 
-    fn write_csv_rows(&self, abs: &Path, sidecar: &DatabaseSidecar, rows: &[DbRow]) -> VaultResult<()> {
+    fn write_csv_rows(
+        &self,
+        abs: &Path,
+        sidecar: &DatabaseSidecar,
+        rows: &[DbRow],
+    ) -> VaultResult<()> {
         let headers = self.field_names_from_sidecar(sidecar);
         let mut wtr = csv::Writer::from_path(abs)?;
         wtr.write_record(&headers)?;
         for row in rows {
-            let record: Vec<String> = headers.iter().map(|h| row.cells.get(h).cloned().unwrap_or_default()).collect();
+            let record: Vec<String> = headers
+                .iter()
+                .map(|h| row.cells.get(h).cloned().unwrap_or_default())
+                .collect();
             wtr.write_record(&record)?;
         }
         wtr.flush()?;
@@ -1077,9 +1473,15 @@ impl Vault {
     }
 
     fn field_names_from_sidecar(&self, sidecar: &DatabaseSidecar) -> Vec<String> {
-        let mut names: Vec<String> = sidecar.fields.iter().filter_map(|f| {
-            f.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
-        }).collect();
+        let mut names: Vec<String> = sidecar
+            .fields
+            .iter()
+            .filter_map(|f| {
+                f.get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
         if names.is_empty() {
             names = vec!["id".to_string(), "Title".to_string(), "Status".to_string()];
         }
@@ -1107,9 +1509,15 @@ impl Vault {
         for entry in fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
-                let rel = format!(".zenvoy/templates/{}", path.file_name().unwrap().to_string_lossy());
+                let rel = format!(
+                    ".zenvoy/templates/{}",
+                    path.file_name().unwrap().to_string_lossy()
+                );
                 let raw = fs::read_to_string(&path)?;
-                results.push(CustomTemplateFile { source_path: rel, raw });
+                results.push(CustomTemplateFile {
+                    source_path: rel,
+                    raw,
+                });
             }
         }
         results.sort_by(|a, b| a.source_path.cmp(&b.source_path));
@@ -1117,7 +1525,10 @@ impl Vault {
     }
 
     pub fn read_template(&self, source_path: &str) -> VaultResult<String> {
-        if !source_path.starts_with(".zenvoy/templates/") || !source_path.ends_with(".md") || source_path.contains("..") {
+        if !source_path.starts_with(".zenvoy/templates/")
+            || !source_path.ends_with(".md")
+            || source_path.contains("..")
+        {
             return Err(VaultError::PathEscape);
         }
         let abs = self.root.join(source_path);
@@ -1133,7 +1544,10 @@ impl Vault {
         let slug = safe_slug(&input.slug);
         let path = unique_path(&dir, &slug, "md");
         fs::write(&path, &input.raw)?;
-        let source_path = format!(".zenvoy/templates/{}", path.file_name().unwrap().to_string_lossy());
+        let source_path = format!(
+            ".zenvoy/templates/{}",
+            path.file_name().unwrap().to_string_lossy()
+        );
         if let Some(prev) = &input.previous_source_path {
             if prev != &source_path {
                 let prev_abs = self.root.join(prev);
@@ -1142,11 +1556,17 @@ impl Vault {
                 }
             }
         }
-        Ok(CustomTemplateFile { source_path, raw: input.raw.clone() })
+        Ok(CustomTemplateFile {
+            source_path,
+            raw: input.raw.clone(),
+        })
     }
 
     pub fn delete_template(&self, source_path: &str) -> VaultResult<()> {
-        if !source_path.starts_with(".zenvoy/templates/") || !source_path.ends_with(".md") || source_path.contains("..") {
+        if !source_path.starts_with(".zenvoy/templates/")
+            || !source_path.ends_with(".md")
+            || source_path.contains("..")
+        {
             return Err(VaultError::PathEscape);
         }
         let abs = self.root.join(source_path);
@@ -1180,7 +1600,10 @@ impl Vault {
             paths.push(rel.to_string());
         }
         self.invalidate_caches();
-        Ok(VaultDemoTourResult { success: true, paths })
+        Ok(VaultDemoTourResult {
+            success: true,
+            paths,
+        })
     }
 
     pub fn remove_demo_tour(&self) -> VaultResult<VaultDemoTourResult> {
@@ -1193,13 +1616,17 @@ impl Vault {
             }
         }
         self.invalidate_caches();
-        Ok(VaultDemoTourResult { success: true, paths })
+        Ok(VaultDemoTourResult {
+            success: true,
+            paths,
+        })
     }
 
     fn default_sidecar(&self, headers: &[String]) -> DatabaseSidecar {
-        let fields: Vec<serde_json::Value> = headers.iter().map(|name| {
-            serde_json::json!({ "name": name, "type": "text", "id": name })
-        }).collect();
+        let fields: Vec<serde_json::Value> = headers
+            .iter()
+            .map(|name| serde_json::json!({ "name": name, "type": "text", "id": name }))
+            .collect();
         let view_id = "default-view".to_string();
         DatabaseSidecar {
             version: 1,
@@ -1213,22 +1640,41 @@ impl Vault {
 }
 
 fn which_exists(cmd: &str) -> bool {
-    std::process::Command::new(cmd).arg("--version").output().is_ok()
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .output()
+        .is_ok()
 }
 
 fn safe_slug(slug: &str) -> String {
-    let s: String = slug.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect();
+    let s: String = slug
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
     let s = s.trim_matches('-').to_string();
-    if s.is_empty() { "template".to_string() } else { s }
+    if s.is_empty() {
+        "template".to_string()
+    } else {
+        s
+    }
 }
 
 fn sanitize_file_stem(title: &str) -> String {
-    title.chars().filter(|c| !"/\\:*?\"<>|".contains(*c)).collect::<String>().trim().to_string()
+    title
+        .chars()
+        .filter(|c| !"/\\:*?\"<>|".contains(*c))
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 fn default_title() -> String {
     use std::time::SystemTime;
-    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let dt = chrono_lite(secs);
     format!("Untitled-{}", dt)
 }
@@ -1244,18 +1690,22 @@ fn chrono_lite(epoch: u64) -> String {
     let mut remaining = days as i64;
     loop {
         let days_in_year = if is_leap(y) { 366 } else { 365 };
-        if remaining < days_in_year { break; }
+        if remaining < days_in_year {
+            break;
+        }
         remaining -= days_in_year;
         y += 1;
     }
     let months_days: [i64; 12] = if is_leap(y) {
-        [31,29,31,30,31,30,31,31,30,31,30,31]
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
-        [31,28,31,30,31,30,31,31,30,31,30,31]
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
     let mut mon = 1;
     for md in months_days {
-        if remaining < md { break; }
+        if remaining < md {
+            break;
+        }
         remaining -= md;
         mon += 1;
     }
@@ -1269,11 +1719,15 @@ fn is_leap(y: i64) -> bool {
 
 fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let candidate = dir.join(format!("{}.{}", stem, ext));
-    if !candidate.exists() { return candidate; }
+    if !candidate.exists() {
+        return candidate;
+    }
     let mut i = 2;
     loop {
         let p = dir.join(format!("{} {}.{}", stem, i, ext));
-        if !p.exists() { return p; }
+        if !p.exists() {
+            return p;
+        }
         i += 1;
     }
 }
@@ -1285,11 +1739,15 @@ fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 fn unique_dir(parent: &Path, base: &str) -> PathBuf {
     let candidate = parent.join(base);
-    if !candidate.exists() { return candidate; }
+    if !candidate.exists() {
+        return candidate;
+    }
     let mut i = 2;
     loop {
         let p = parent.join(format!("{} {}", base, i));
-        if !p.exists() { return p; }
+        if !p.exists() {
+            return p;
+        }
         i += 1;
     }
 }
@@ -1321,7 +1779,9 @@ fn normalize_vault_settings(mut settings: VaultSettings, fallback_primary: &str)
     // Validate folder icons
     let mut valid_icons = HashMap::new();
     for (key, value) in &settings.folder_icons {
-        if key.is_empty() { continue; }
+        if key.is_empty() {
+            continue;
+        }
         if VALID_FOLDER_ICON_IDS.contains(&value.as_str()) {
             valid_icons.insert(key.clone(), value.clone());
         }
@@ -1332,12 +1792,20 @@ fn normalize_vault_settings(mut settings: VaultSettings, fallback_primary: &str)
 
 fn normalize_daily_notes_dir(value: &str) -> String {
     let trimmed = value.trim_matches('/').trim();
-    if trimmed.is_empty() { "Daily Notes".to_string() } else { trimmed.to_string() }
+    if trimmed.is_empty() {
+        "Daily Notes".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn normalize_weekly_notes_dir(value: &str) -> String {
     let trimmed = value.trim_matches('/').trim();
-    if trimmed.is_empty() { "Weekly Notes".to_string() } else { trimmed.to_string() }
+    if trimmed.is_empty() {
+        "Weekly Notes".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 pub fn folder_icon_key(folder: &NoteFolder, subpath: &str) -> String {
@@ -1358,7 +1826,10 @@ pub fn rewrite_folder_icons_for_rename(
             next.insert(folder_icon_key(folder, new_subpath), value.clone());
         } else if key.starts_with(&prefix) {
             let suffix = &key[exact_key.len()..];
-            next.insert(format!("{}{}", folder_icon_key(folder, new_subpath), suffix), value.clone());
+            next.insert(
+                format!("{}{}", folder_icon_key(folder, new_subpath), suffix),
+                value.clone(),
+            );
         } else {
             next.insert(key.clone(), value.clone());
         }
@@ -1373,7 +1844,8 @@ pub fn remove_folder_icons(
 ) -> HashMap<String, String> {
     let exact_key = folder_icon_key(folder, subpath);
     let prefix = format!("{}/", exact_key);
-    icons.iter()
+    icons
+        .iter()
         .filter(|(key, _)| *key != &exact_key && !key.starts_with(&prefix))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
@@ -1418,31 +1890,45 @@ fn wiki_code_mask(body: &str) -> Vec<bool> {
             let start = i;
             // Skip to end of opening fence line
             i += 3;
-            while i < len && bytes[i] != b'\n' { i += 1; }
-            if i < len { i += 1; }
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+            if i < len {
+                i += 1;
+            }
             // Find closing ```
             let mut found_close = false;
             while i < len {
                 if bytes[i] == b'`' && i + 3 <= len && &body[i..i + 3] == "```" {
                     // Mark through end of closing fence line
                     i += 3;
-                    while i < len && bytes[i] != b'\n' { i += 1; }
-                    if i < len { i += 1; }
+                    while i < len && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                    if i < len {
+                        i += 1;
+                    }
                     found_close = true;
                     break;
                 }
                 i += 1;
             }
-            if !found_close { i = len; }
-            for j in start..i { mask[j] = true; }
+            if !found_close {
+                i = len;
+            }
+            mask[start..i].fill(true);
         }
         // Inline code
         else if bytes[i] == b'`' {
             let start = i;
             i += 1;
-            while i < len && bytes[i] != b'`' { i += 1; }
-            if i < len { i += 1; }
-            for j in start..i { mask[j] = true; }
+            while i < len && bytes[i] != b'`' {
+                i += 1;
+            }
+            if i < len {
+                i += 1;
+            }
+            mask[start..i].fill(true);
         } else {
             i += 1;
         }
@@ -1451,7 +1937,10 @@ fn wiki_code_mask(body: &str) -> Vec<bool> {
 }
 
 fn wiki_resolve_target<'a>(notes: &'a [NoteMeta], target: &str) -> Option<&'a NoteMeta> {
-    let active: Vec<_> = notes.iter().filter(|n| n.folder != NoteFolder::Trash).collect();
+    let active: Vec<_> = notes
+        .iter()
+        .filter(|n| n.folder != NoteFolder::Trash)
+        .collect();
     if wiki_is_path_like(target) {
         let clean = target.trim_start_matches('/');
         // Try exact path match
@@ -1462,11 +1951,19 @@ fn wiki_resolve_target<'a>(notes: &'a [NoteMeta], target: &str) -> Option<&'a No
         active.iter().find(|n| n.path.ends_with(clean)).copied()
     } else {
         let lower = target.to_lowercase();
-        active.iter().find(|n| n.title.to_lowercase() == lower).copied()
+        active
+            .iter()
+            .find(|n| n.title.to_lowercase() == lower)
+            .copied()
     }
 }
 
-fn rewrite_wikilinks_for_rename(body: &str, notes: &[NoteMeta], old_path: &str, new_title: &str) -> (String, usize) {
+fn rewrite_wikilinks_for_rename(
+    body: &str,
+    notes: &[NoteMeta],
+    old_path: &str,
+    new_title: &str,
+) -> (String, usize) {
     let mask = wiki_code_mask(body);
     let mut result = String::with_capacity(body.len());
     let mut count = 0usize;
@@ -1486,7 +1983,7 @@ fn rewrite_wikilinks_for_rename(body: &str, notes: &[NoteMeta], old_path: &str, 
             if i + 1 >= len {
                 // No closing ]], just append rest
                 result.push_str(&body[start..]);
-                i = len;
+
                 break;
             }
             let content = &body[content_start..i];
@@ -1536,11 +2033,21 @@ fn normalize_comments(comments: Vec<NoteComment>, note_path: &str) -> Vec<NoteCo
         .into_iter()
         .filter(|c| !c.body.trim().is_empty())
         .map(|mut c| {
-            if c.id.is_empty() { c.id = new_comment_id(); }
-            if c.created_at == 0 { c.created_at = now; }
-            if c.updated_at == 0 { c.updated_at = c.created_at; }
-            if c.anchor_start < 0 { c.anchor_start = 0; }
-            if c.anchor_end < c.anchor_start { c.anchor_end = c.anchor_start; }
+            if c.id.is_empty() {
+                c.id = new_comment_id();
+            }
+            if c.created_at == 0 {
+                c.created_at = now;
+            }
+            if c.updated_at == 0 {
+                c.updated_at = c.created_at;
+            }
+            if c.anchor_start < 0 {
+                c.anchor_start = 0;
+            }
+            if c.anchor_end < c.anchor_start {
+                c.anchor_end = c.anchor_start;
+            }
             c.note_path = note_path.to_string();
             c
         })
@@ -1627,8 +2134,12 @@ mod tests {
     fn test_settings_normalizes_invalid_folder_icons() {
         let (_dir, vault) = test_vault();
         let mut settings = vault.get_settings().unwrap();
-        settings.folder_icons.insert("inbox:projects".to_string(), "invalid_icon".to_string());
-        settings.folder_icons.insert("inbox:docs".to_string(), "book".to_string());
+        settings
+            .folder_icons
+            .insert("inbox:projects".to_string(), "invalid_icon".to_string());
+        settings
+            .folder_icons
+            .insert("inbox:docs".to_string(), "book".to_string());
         let saved = vault.set_settings(settings).unwrap();
         assert!(!saved.folder_icons.contains_key("inbox:projects"));
         assert_eq!(saved.folder_icons.get("inbox:docs").unwrap(), "book");
@@ -1641,7 +2152,8 @@ mod tests {
         icons.insert("inbox:projects/sub".to_string(), "terminal".to_string());
         icons.insert("inbox:other".to_string(), "book".to_string());
 
-        let result = rewrite_folder_icons_for_rename(&icons, &NoteFolder::Inbox, "projects", "work");
+        let result =
+            rewrite_folder_icons_for_rename(&icons, &NoteFolder::Inbox, "projects", "work");
         assert_eq!(result.get("inbox:work").unwrap(), "code");
         assert_eq!(result.get("inbox:work/sub").unwrap(), "terminal");
         assert_eq!(result.get("inbox:other").unwrap(), "book");
@@ -1673,7 +2185,11 @@ mod tests {
     #[test]
     fn test_list_notes_extracts_metadata() {
         let (_dir, vault) = test_vault();
-        std::fs::write(vault.root().join("inbox").join("Tagged.md"), "# Tagged Note\n\nHello #rust #programming\n\nSee [[Other Note]]\n").unwrap();
+        std::fs::write(
+            vault.root().join("inbox").join("Tagged.md"),
+            "# Tagged Note\n\nHello #rust #programming\n\nSee [[Other Note]]\n",
+        )
+        .unwrap();
         let notes = vault.list_notes().unwrap();
         let tagged = notes.iter().find(|n| n.title == "Tagged Note").unwrap();
         assert!(tagged.tags.contains(&"rust".to_string()));
@@ -1692,7 +2208,9 @@ mod tests {
     #[test]
     fn test_write_note() {
         let (_dir, vault) = test_vault();
-        let meta = vault.write_note("inbox/Welcome.md", "# Updated\n\nNew body").unwrap();
+        let meta = vault
+            .write_note("inbox/Welcome.md", "# Updated\n\nNew body")
+            .unwrap();
         assert_eq!(meta.title, "Welcome");
         let content = vault.read_note("inbox/Welcome.md").unwrap();
         assert!(content.body.contains("New body"));
@@ -1701,7 +2219,9 @@ mod tests {
     #[test]
     fn test_create_note() {
         let (_dir, vault) = test_vault();
-        let meta = vault.create_note(&NoteFolder::Inbox, Some("My Note"), None).unwrap();
+        let meta = vault
+            .create_note(&NoteFolder::Inbox, Some("My Note"), None)
+            .unwrap();
         assert_eq!(meta.title, "My Note");
         assert!(meta.path.starts_with("inbox/"));
         assert!(meta.path.ends_with(".md"));
@@ -1710,15 +2230,21 @@ mod tests {
     #[test]
     fn test_create_note_deduplicates() {
         let (_dir, vault) = test_vault();
-        vault.create_note(&NoteFolder::Inbox, Some("Test"), None).unwrap();
-        let meta2 = vault.create_note(&NoteFolder::Inbox, Some("Test"), None).unwrap();
+        vault
+            .create_note(&NoteFolder::Inbox, Some("Test"), None)
+            .unwrap();
+        let meta2 = vault
+            .create_note(&NoteFolder::Inbox, Some("Test"), None)
+            .unwrap();
         assert!(meta2.path.contains("Test 2"));
     }
 
     #[test]
     fn test_rename_note() {
         let (_dir, vault) = test_vault();
-        let meta = vault.rename_note("inbox/Welcome.md", "Hello World").unwrap();
+        let meta = vault
+            .rename_note("inbox/Welcome.md", "Hello World")
+            .unwrap();
         assert_eq!(meta.title, "Hello World");
         assert!(vault.read_note("inbox/Hello World.md").is_ok());
         assert!(vault.read_note("inbox/Welcome.md").is_err());
@@ -1786,7 +2312,11 @@ mod tests {
     fn test_move_preserves_subpath() {
         let (_dir, vault) = test_vault();
         std::fs::create_dir_all(vault.root().join("inbox").join("projects")).unwrap();
-        std::fs::write(vault.root().join("inbox").join("projects").join("deep.md"), "# Deep\n").unwrap();
+        std::fs::write(
+            vault.root().join("inbox").join("projects").join("deep.md"),
+            "# Deep\n",
+        )
+        .unwrap();
         let trashed = vault.move_to_trash("inbox/projects/deep.md").unwrap();
         assert!(trashed.path.contains("projects"));
         let restored = vault.restore_from_trash(&trashed.path).unwrap();
@@ -1799,14 +2329,20 @@ mod tests {
         std::fs::create_dir_all(vault.root().join("inbox").join("projects")).unwrap();
         std::fs::create_dir_all(vault.root().join("inbox").join("projects").join("sub")).unwrap();
         let folders = vault.list_folders().unwrap();
-        assert!(folders.iter().any(|f| f.subpath == "projects" && f.folder == NoteFolder::Inbox));
-        assert!(folders.iter().any(|f| f.subpath == "projects/sub" && f.folder == NoteFolder::Inbox));
+        assert!(folders
+            .iter()
+            .any(|f| f.subpath == "projects" && f.folder == NoteFolder::Inbox));
+        assert!(folders
+            .iter()
+            .any(|f| f.subpath == "projects/sub" && f.folder == NoteFolder::Inbox));
     }
 
     #[test]
     fn test_create_folder() {
         let (_dir, vault) = test_vault();
-        vault.create_folder(&NoteFolder::Inbox, "new-folder").unwrap();
+        vault
+            .create_folder(&NoteFolder::Inbox, "new-folder")
+            .unwrap();
         let folders = vault.list_folders().unwrap();
         assert!(folders.iter().any(|f| f.subpath == "new-folder"));
     }
@@ -1815,7 +2351,9 @@ mod tests {
     fn test_rename_folder() {
         let (_dir, vault) = test_vault();
         vault.create_folder(&NoteFolder::Inbox, "old-name").unwrap();
-        let new_sub = vault.rename_folder(&NoteFolder::Inbox, "old-name", "new-name").unwrap();
+        let new_sub = vault
+            .rename_folder(&NoteFolder::Inbox, "old-name", "new-name")
+            .unwrap();
         assert_eq!(new_sub, "new-name");
         let folders = vault.list_folders().unwrap();
         assert!(!folders.iter().any(|f| f.subpath == "old-name"));
@@ -1835,8 +2373,14 @@ mod tests {
     fn test_duplicate_folder() {
         let (_dir, vault) = test_vault();
         vault.create_folder(&NoteFolder::Inbox, "original").unwrap();
-        std::fs::write(vault.root().join("inbox").join("original").join("note.md"), "# Hi\n").unwrap();
-        let new_sub = vault.duplicate_folder(&NoteFolder::Inbox, "original").unwrap();
+        std::fs::write(
+            vault.root().join("inbox").join("original").join("note.md"),
+            "# Hi\n",
+        )
+        .unwrap();
+        let new_sub = vault
+            .duplicate_folder(&NoteFolder::Inbox, "original")
+            .unwrap();
         assert!(new_sub.contains("copy"));
         let folders = vault.list_folders().unwrap();
         assert!(folders.iter().any(|f| f.subpath == new_sub));
@@ -1861,7 +2405,9 @@ mod tests {
         // Create a source file to import
         let src = dir.path().join("photo.png");
         std::fs::write(&src, b"fake png data").unwrap();
-        let imported = vault.import_files_to_note("inbox/Welcome.md", &[src.to_string_lossy().to_string()]).unwrap();
+        let imported = vault
+            .import_files_to_note("inbox/Welcome.md", &[src.to_string_lossy().to_string()])
+            .unwrap();
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].kind, "image");
         assert!(imported[0].markdown.contains("![photo.png]"));
@@ -1874,20 +2420,34 @@ mod tests {
     fn test_rename_asset() {
         let (_dir, vault) = test_vault();
         std::fs::write(vault.root().join("attachements").join("test.png"), b"data").unwrap();
-        let meta = vault.rename_asset("attachements/test.png", "renamed.png").unwrap();
+        let meta = vault
+            .rename_asset("attachements/test.png", "renamed.png")
+            .unwrap();
         assert_eq!(meta.name, "renamed.png");
     }
 
     #[test]
     fn test_delete_and_restore_asset() {
         let (_dir, vault) = test_vault();
-        std::fs::write(vault.root().join("attachements").join("doomed.pdf"), b"pdf data").unwrap();
+        std::fs::write(
+            vault.root().join("attachements").join("doomed.pdf"),
+            b"pdf data",
+        )
+        .unwrap();
         let deleted = vault.delete_asset("attachements/doomed.pdf").unwrap();
         assert_eq!(deleted.name, "doomed.pdf");
-        assert!(!vault.root().join("attachements").join("doomed.pdf").exists());
+        assert!(!vault
+            .root()
+            .join("attachements")
+            .join("doomed.pdf")
+            .exists());
         let restored = vault.restore_deleted_asset(&deleted).unwrap();
         assert_eq!(restored.name, "doomed.pdf");
-        assert!(vault.root().join("attachements").join("doomed.pdf").exists());
+        assert!(vault
+            .root()
+            .join("attachements")
+            .join("doomed.pdf")
+            .exists());
     }
 
     #[test]
@@ -1899,14 +2459,23 @@ mod tests {
         ).unwrap();
         let tasks = vault.scan_tasks().unwrap();
         assert!(tasks.len() >= 3);
-        let buy = tasks.iter().find(|t| t.content.contains("Buy groceries")).unwrap();
+        let buy = tasks
+            .iter()
+            .find(|t| t.content.contains("Buy groceries"))
+            .unwrap();
         assert_eq!(buy.due, "2024-01-15");
         assert_eq!(buy.priority, "high");
         assert!(!buy.checked);
-        let clean = tasks.iter().find(|t| t.content.contains("Clean house")).unwrap();
+        let clean = tasks
+            .iter()
+            .find(|t| t.content.contains("Clean house"))
+            .unwrap();
         assert!(clean.checked);
         assert!(clean.waiting);
-        let read = tasks.iter().find(|t| t.content.contains("Read book")).unwrap();
+        let read = tasks
+            .iter()
+            .find(|t| t.content.contains("Read book"))
+            .unwrap();
         assert!(read.tags.contains(&"reading".to_string()));
     }
 
@@ -1915,8 +2484,9 @@ mod tests {
         let (_dir, vault) = test_vault();
         std::fs::write(
             vault.root().join("inbox").join("Specific.md"),
-            "# Specific\n\n- [ ] Task A\n- [ ] Task B\n"
-        ).unwrap();
+            "# Specific\n\n- [ ] Task A\n- [ ] Task B\n",
+        )
+        .unwrap();
         let tasks = vault.scan_tasks_for_path("inbox/Specific.md").unwrap();
         assert_eq!(tasks.len(), 2);
         assert_eq!(tasks[0].source_path, "inbox/Specific.md");
@@ -1927,8 +2497,9 @@ mod tests {
         let (_dir, vault) = test_vault();
         std::fs::write(
             vault.root().join("trash").join("Old.md"),
-            "# Old\n\n- [ ] Deleted task\n"
-        ).unwrap();
+            "# Old\n\n- [ ] Deleted task\n",
+        )
+        .unwrap();
         let tasks = vault.scan_tasks().unwrap();
         assert!(!tasks.iter().any(|t| t.content.contains("Deleted task")));
     }
@@ -1943,7 +2514,11 @@ mod tests {
     #[test]
     fn test_search_vault_text() {
         let (_dir, vault) = test_vault();
-        std::fs::write(vault.root().join("inbox").join("Searchable.md"), "# Search Target\n\nThis contains the keyword findme in a sentence.\n").unwrap();
+        std::fs::write(
+            vault.root().join("inbox").join("Searchable.md"),
+            "# Search Target\n\nThis contains the keyword findme in a sentence.\n",
+        )
+        .unwrap();
         let results = vault.search_vault_text("findme", None).unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].path, "inbox/Searchable.md");
@@ -1954,7 +2529,11 @@ mod tests {
     #[test]
     fn test_search_skips_trash() {
         let (_dir, vault) = test_vault();
-        std::fs::write(vault.root().join("trash").join("Old.md"), "# Old\n\nfindme in trash\n").unwrap();
+        std::fs::write(
+            vault.root().join("trash").join("Old.md"),
+            "# Old\n\nfindme in trash\n",
+        )
+        .unwrap();
         let results = vault.search_vault_text("findme", None).unwrap();
         assert!(results.iter().all(|r| !r.path.starts_with("trash/")));
     }
@@ -1964,9 +2543,12 @@ mod tests {
         let (_dir, vault) = test_vault();
         std::fs::write(
             vault.root().join("inbox").join("Linker.md"),
-            "# Linker\n\nSee [[Welcome to Zenvoy]] for info.\n"
-        ).unwrap();
-        vault.rename_note("inbox/Welcome.md", "Getting Started").unwrap();
+            "# Linker\n\nSee [[Welcome to Zenvoy]] for info.\n",
+        )
+        .unwrap();
+        vault
+            .rename_note("inbox/Welcome.md", "Getting Started")
+            .unwrap();
         let linker = vault.read_note("inbox/Linker.md").unwrap();
         assert!(linker.body.contains("[[Getting Started]]"));
         assert!(!linker.body.contains("[[Welcome to Zenvoy]]"));
@@ -1977,9 +2559,12 @@ mod tests {
         let (_dir, vault) = test_vault();
         std::fs::write(
             vault.root().join("inbox").join("WithAlias.md"),
-            "# With Alias\n\nSee [[Welcome to Zenvoy|my welcome]] for info.\n"
-        ).unwrap();
-        vault.rename_note("inbox/Welcome.md", "Hello World").unwrap();
+            "# With Alias\n\nSee [[Welcome to Zenvoy|my welcome]] for info.\n",
+        )
+        .unwrap();
+        vault
+            .rename_note("inbox/Welcome.md", "Hello World")
+            .unwrap();
         let content = vault.read_note("inbox/WithAlias.md").unwrap();
         assert!(content.body.contains("[[Hello World|my welcome]]"));
     }
@@ -1989,8 +2574,9 @@ mod tests {
         let (_dir, vault) = test_vault();
         std::fs::write(
             vault.root().join("inbox").join("Code.md"),
-            "# Code\n\n```\n[[Welcome to Zenvoy]]\n```\n\nAlso [[Welcome to Zenvoy]] outside.\n"
-        ).unwrap();
+            "# Code\n\n```\n[[Welcome to Zenvoy]]\n```\n\nAlso [[Welcome to Zenvoy]] outside.\n",
+        )
+        .unwrap();
         vault.rename_note("inbox/Welcome.md", "New Name").unwrap();
         let content = vault.read_note("inbox/Code.md").unwrap();
         assert!(content.body.contains("```\n[[Welcome to Zenvoy]]\n```"));
@@ -2018,7 +2604,9 @@ mod tests {
             updated_at: 0,
             resolved_at: None,
         }];
-        let saved = vault.write_note_comments("inbox/Welcome.md", input).unwrap();
+        let saved = vault
+            .write_note_comments("inbox/Welcome.md", input)
+            .unwrap();
         assert_eq!(saved.len(), 1);
         assert!(!saved[0].id.is_empty());
         assert!(saved[0].created_at > 0);
@@ -2041,8 +2629,12 @@ mod tests {
             updated_at: 1000,
             resolved_at: None,
         }];
-        vault.write_note_comments("inbox/Welcome.md", input).unwrap();
-        vault.write_note_comments("inbox/Welcome.md", vec![]).unwrap();
+        vault
+            .write_note_comments("inbox/Welcome.md", input)
+            .unwrap();
+        vault
+            .write_note_comments("inbox/Welcome.md", vec![])
+            .unwrap();
         let loaded = vault.read_note_comments("inbox/Welcome.md").unwrap();
         assert!(loaded.is_empty());
     }
@@ -2050,7 +2642,9 @@ mod tests {
     #[test]
     fn test_create_and_open_database() {
         let (_dir, vault) = test_vault();
-        let doc = vault.create_database(&NoteFolder::Inbox, "", Some("Projects")).unwrap();
+        let doc = vault
+            .create_database(&NoteFolder::Inbox, "", Some("Projects"))
+            .unwrap();
         assert_eq!(doc.title, "Projects");
         assert!(doc.rows.is_empty());
         let opened = vault.open_database(&doc.path).unwrap();
@@ -2060,8 +2654,12 @@ mod tests {
     #[test]
     fn test_list_databases() {
         let (_dir, vault) = test_vault();
-        vault.create_database(&NoteFolder::Inbox, "", Some("DB1")).unwrap();
-        vault.create_database(&NoteFolder::Inbox, "", Some("DB2")).unwrap();
+        vault
+            .create_database(&NoteFolder::Inbox, "", Some("DB1"))
+            .unwrap();
+        vault
+            .create_database(&NoteFolder::Inbox, "", Some("DB2"))
+            .unwrap();
         let dbs = vault.list_databases().unwrap();
         assert_eq!(dbs.len(), 2);
     }
@@ -2069,12 +2667,17 @@ mod tests {
     #[test]
     fn test_write_database_rows() {
         let (_dir, vault) = test_vault();
-        let doc = vault.create_database(&NoteFolder::Inbox, "", Some("Tasks")).unwrap();
+        let doc = vault
+            .create_database(&NoteFolder::Inbox, "", Some("Tasks"))
+            .unwrap();
         let mut cells = std::collections::HashMap::new();
         cells.insert("id".to_string(), "row-1".to_string());
         cells.insert("Title".to_string(), "First Task".to_string());
         cells.insert("Status".to_string(), "Todo".to_string());
-        let rows = vec![DbRow { id: "row-1".to_string(), cells }];
+        let rows = vec![DbRow {
+            id: "row-1".to_string(),
+            cells,
+        }];
         let updated = vault.write_database_rows(&doc.path, rows).unwrap();
         assert_eq!(updated.rows.len(), 1);
     }

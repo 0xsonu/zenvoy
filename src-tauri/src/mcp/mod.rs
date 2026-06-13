@@ -1,11 +1,11 @@
-pub mod tools;
 pub mod instructions;
+pub mod tools;
 
-use std::io::{BufRead, Write};
+use crate::config::Config;
+use crate::vault::{Vault, VaultOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::vault::{Vault, VaultOptions};
-use crate::config::Config;
+use std::io::{BufRead, Write};
 
 #[derive(Deserialize)]
 struct JsonRpcRequest {
@@ -40,7 +40,9 @@ pub fn run_mcp_server() {
             Ok(l) => l,
             Err(_) => break,
         };
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let request: JsonRpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(_) => continue,
@@ -55,11 +57,14 @@ pub fn run_mcp_server() {
 fn handle_request(vault: &Vault, req: &JsonRpcRequest) -> JsonRpcResponse {
     let id = req.id.clone().unwrap_or(Value::Null);
     match req.method.as_str() {
-        "initialize" => success(id, json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "zen-mcp", "version": "1.0.0"}
-        })),
+        "initialize" => success(
+            id,
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "zen-mcp", "version": "1.0.0"}
+            }),
+        ),
         "tools/list" => success(id, json!({"tools": tools::list_tools()})),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -70,15 +75,30 @@ fn handle_request(vault: &Vault, req: &JsonRpcRequest) -> JsonRpcResponse {
                 Err(e) => error(id, -1, &e),
             }
         }
-        "notifications/initialized" => JsonRpcResponse { jsonrpc: "2.0".into(), id, result: None, error: None },
+        "notifications/initialized" => JsonRpcResponse {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: None,
+        },
         _ => error(id, -32601, "method not found"),
     }
 }
 
 fn success(id: Value, result: Value) -> JsonRpcResponse {
-    JsonRpcResponse { jsonrpc: "2.0".into(), id, result: Some(result), error: None }
+    JsonRpcResponse {
+        jsonrpc: "2.0".into(),
+        id,
+        result: Some(result),
+        error: None,
+    }
 }
 
 fn error(id: Value, code: i32, msg: &str) -> JsonRpcResponse {
-    JsonRpcResponse { jsonrpc: "2.0".into(), id, result: None, error: Some(json!({"code": code, "message": msg})) }
+    JsonRpcResponse {
+        jsonrpc: "2.0".into(),
+        id,
+        result: None,
+        error: Some(json!({"code": code, "message": msg})),
+    }
 }
