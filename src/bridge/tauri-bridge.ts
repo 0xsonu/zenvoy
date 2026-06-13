@@ -129,7 +129,7 @@ export function createTauriBridge(): ZenBridge {
 
     // ── Notes ────────────────────────────────────────────────────────
     listNotes: () => invoke<NoteMeta[]>('list_notes'),
-    listNotesPage: (request) => invoke<ListNotesPageResponse>('list_notes_page', { request }),
+    listNotesPage: undefined,
     listFolders: () => invoke<FolderEntry[]>('list_folders'),
     listAssets: () => invoke<AssetMeta[]>('list_assets'),
     hasAssetsDir: () => invoke<boolean>('has_assets_dir'),
