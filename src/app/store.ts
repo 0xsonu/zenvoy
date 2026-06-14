@@ -84,7 +84,7 @@ import {
   rewriteFolderIconsForRename
 } from './lib/vault-layout'
 import { renderTemplate, renderTitle } from './lib/template-render'
-import type { NoteTemplate } from '@bridge-contract/templates'
+import type { NoteTemplate } from '@bridge/templates'
 import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
 import {
   composeTemplateFile,

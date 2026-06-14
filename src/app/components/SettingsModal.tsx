@@ -40,14 +40,13 @@ import { normalizeDailyNotesDirectory, normalizeWeeklyNotesDirectory } from '../
 import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
 import { composeTemplateFile, mergeTemplates } from '@shared/template-files'
 import { TemplateEditorModal } from './TemplateEditorModal'
-import type { NoteTemplate } from '@bridge-contract/templates'
+import type { NoteTemplate } from '@bridge/templates'
 import {
   getSettingsSearchResults,
   type SettingsSearchCategory
 } from '../lib/settings-search'
 import { useAppUpdateState } from '../lib/app-update-state'
 import { getZenBridge } from '@bridge/bridge'
-import companyLogo from '../assets/lumary-labs-logo.svg'
 import { confirmApp } from '../lib/confirm-requests'
 import { RemoteWorkspaceProfileModal } from './RemoteWorkspaceProfileModal'
 import { Button } from './ui/Button'
@@ -2072,7 +2071,7 @@ export function SettingsModal(): JSX.Element {
       id: 'about',
       title: 'About',
       description: 'App identity, version, updater status, and company information.',
-      keywords: ['version', 'company', 'lumary', 'about', 'logo', 'updates'],
+      keywords: ['version', 'about', 'updates'],
       searchItems: [
         {
           id: 'zenvoy-version',
@@ -2086,12 +2085,6 @@ export function SettingsModal(): JSX.Element {
           description: 'Check GitHub releases for a newer Zenvoy build.',
           keywords: ['release', 'download', 'install', 'updater']
         },
-        {
-          id: 'lumary-labs',
-          title: 'Lumary Labs',
-          description: 'Company and product details.',
-          keywords: ['company', 'lumary', 'logo']
-        }
       ],
       content: (
         <Section title="Zenvoy" settingId="zenvoy-version">
@@ -2160,7 +2153,7 @@ export function SettingsModal(): JSX.Element {
                       </button>
                     )}
                     <a
-                      href={appInfo.homepage ?? '#'}
+                      href={appInfo.homepage ?? 'https://github.com/Zenvoy/zenvoy/releases/latest'}
                       target="_blank"
                       rel="noreferrer"
                       className="rounded-xl border border-paper-300/70 bg-paper-100/80 px-3.5 py-2 text-xs font-medium text-ink-700 transition-colors hover:bg-paper-200"
@@ -2208,46 +2201,9 @@ export function SettingsModal(): JSX.Element {
                 </div>
               </div>
               <p className="mx-auto mt-2 max-w-[44rem] text-center">
-                {appInfo.description}. Visit{' '}
-                <a
-                  href="https://lumarylabs.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-ink-900 underline decoration-paper-400 underline-offset-2 hover:text-accent"
-                >
-                  lumarylabs.com
-                </a>{' '}
-                for company and product details.
+                {appInfo.description}
               </p>
-              <div
-                className="mt-4 flex flex-col items-center gap-1.5 border-t border-paper-300/55 pt-4 text-center"
-                {...settingsSearchTargetProps('lumary-labs')}
-              >
-                <span className="text-xs font-medium uppercase tracking-[0.16em] text-ink-500">
-                  Built by
-                </span>
-                <a
-                  href="https://lumarylabs.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex shrink-0 items-center justify-center px-2 py-1 transition-transform hover:-translate-y-px hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45"
-                >
-                  <span
-                    aria-label="Lumary Labs"
-                    className="block h-12 w-[10.5rem] bg-ink-900"
-                    style={{
-                      WebkitMaskImage: `url(${companyLogo})`,
-                      maskImage: `url(${companyLogo})`,
-                      WebkitMaskRepeat: 'no-repeat',
-                      maskRepeat: 'no-repeat',
-                      WebkitMaskPosition: 'center',
-                      maskPosition: 'center',
-                      WebkitMaskSize: 'contain',
-                      maskSize: 'contain'
-                    }}
-                  />
-                </a>
-              </div>
+
             </div>
           </div>
         </Section>

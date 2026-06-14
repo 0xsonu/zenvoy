@@ -20,11 +20,11 @@ import { resolveSystemFolderLabels } from './system-folder-labels'
 import { normalizeVaultSettings } from './vault-layout'
 import { DEMO_TOUR_START_PATH } from '@shared/demo-tour'
 
-const APP_WEBSITE_URL = 'https://'
+const APP_WEBSITE_URL = 'https://zenvoy.org'
 const APP_DISCORD_URL = 'https://discord.gg/W4fWzapKS6'
-const APP_REPOSITORY_URL = 'https://github.com/ZenNotes/zennotes'
-const APP_RELEASES_URL = 'https://github.com/ZenNotes/zennotes/releases/latest'
-const APP_ISSUES_URL = 'https://github.com/ZenNotes/zennotes/issues'
+const APP_REPOSITORY_URL = 'https://github.com/0xsonu/zenvoy'
+const APP_RELEASES_URL = 'https://github.com/0xsonu/zenvoy/releases/latest'
+const APP_ISSUES_URL = 'https://github.com/0xsonu/zenvoy/issues'
 
 type FoldCommand = 'foldCode' | 'unfoldCode' | 'foldAll' | 'unfoldAll'
 

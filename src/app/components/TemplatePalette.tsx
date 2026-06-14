@@ -13,7 +13,7 @@ import { isPaletteNextKey, isPalettePreviousKey } from '../lib/palette-nav'
 import { focusEditorNormalMode } from '../lib/editor-focus'
 import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
 import { mergeTemplates } from '@shared/template-files'
-import type { NoteTemplate } from '@bridge-contract/templates'
+import type { NoteTemplate } from '@bridge/templates'
 import { Modal } from './ui/Modal'
 
 export function TemplatePalette(): JSX.Element {
