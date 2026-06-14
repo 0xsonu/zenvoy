@@ -9,6 +9,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(TauriAppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::platform,
@@ -96,6 +97,11 @@ fn main() {
             commands::login_server_session,
             commands::logout_server_session,
             commands::render_tikz,
+            commands::get_app_update_state,
+            commands::check_for_app_updates,
+            commands::check_for_app_updates_with_ui,
+            commands::download_app_update,
+            commands::install_app_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

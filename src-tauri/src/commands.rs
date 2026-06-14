@@ -2,6 +2,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{Emitter, State, WebviewWindow, Window};
+use tauri_plugin_updater::UpdaterExt;
 
 use crate::vault::types::*;
 use crate::vault::{Vault, VaultOptions};
@@ -1006,4 +1007,163 @@ pub async fn render_tikz(source: String) -> Result<serde_json::Value, String> {
             serde_json::json!({"svg": null, "error": "pdflatex not found or compilation failed"}),
         ),
     }
+}
+
+// ─── Updater ──────────────────────────────────────────────────────────────────
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateState {
+    pub phase: String,
+    pub current_version: String,
+    pub available_version: Option<String>,
+    pub release_name: Option<String>,
+    pub release_date: Option<String>,
+    pub release_notes: Option<String>,
+    pub progress_percent: Option<f64>,
+    pub transferred_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub bytes_per_second: Option<u64>,
+    pub message: String,
+}
+
+impl AppUpdateState {
+    fn idle(version: &str) -> Self {
+        Self {
+            phase: "idle".into(),
+            current_version: version.into(),
+            available_version: None,
+            release_name: None,
+            release_date: None,
+            release_notes: None,
+            progress_percent: None,
+            transferred_bytes: None,
+            total_bytes: None,
+            bytes_per_second: None,
+            message: "Ready to check for updates.".into(),
+        }
+    }
+}
+
+fn current_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+pub fn get_app_update_state() -> AppUpdateState {
+    AppUpdateState::idle(&current_version())
+}
+
+#[tauri::command]
+pub async fn check_for_app_updates(app: tauri::AppHandle) -> Result<AppUpdateState, String> {
+    let updater = app
+        .updater()
+        .map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(AppUpdateState {
+            phase: "available".into(),
+            current_version: current_version(),
+            available_version: Some(update.version.clone()),
+            release_name: Some(format!("Zenvoy v{}", update.version)),
+            release_date: update.date.map(|d| d.to_string()),
+            release_notes: update.body.clone(),
+            progress_percent: None,
+            transferred_bytes: None,
+            total_bytes: None,
+            bytes_per_second: None,
+            message: format!("Update v{} available.", update.version),
+        }),
+        Ok(None) => Ok(AppUpdateState {
+            phase: "not-available".into(),
+            current_version: current_version(),
+            message: "You're on the latest version.".into(),
+            ..AppUpdateState::idle(&current_version())
+        }),
+        Err(e) => Ok(AppUpdateState {
+            phase: "error".into(),
+            current_version: current_version(),
+            message: format!("Update check failed: {e}"),
+            ..AppUpdateState::idle(&current_version())
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn check_for_app_updates_with_ui(app: tauri::AppHandle) -> Result<(), String> {
+    let state = check_for_app_updates(app.clone()).await?;
+    app.emit("app-update-state", &state).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn download_app_update(app: tauri::AppHandle) -> Result<AppUpdateState, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No update available".to_string())?;
+
+    let version = update.version.clone();
+    let app_clone = app.clone();
+
+    update
+        .download_and_install(
+            move |chunk, content_length| {
+                let total = content_length.unwrap_or(0);
+                let percent = if total > 0 {
+                    (chunk as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
+                let _ = app_clone.emit(
+                    "app-update-state",
+                    &AppUpdateState {
+                        phase: "downloading".into(),
+                        current_version: current_version(),
+                        available_version: Some(version.clone()),
+                        release_name: None,
+                        release_date: None,
+                        release_notes: None,
+                        progress_percent: Some(percent),
+                        transferred_bytes: Some(chunk as u64),
+                        total_bytes: Some(total),
+                        bytes_per_second: None,
+                        message: "Downloading update...".into(),
+                    },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(AppUpdateState {
+        phase: "downloaded".into(),
+        current_version: current_version(),
+        available_version: Some(update.version.clone()),
+        release_name: None,
+        release_date: None,
+        release_notes: None,
+        progress_percent: Some(100.0),
+        transferred_bytes: None,
+        total_bytes: None,
+        bytes_per_second: None,
+        message: "Update downloaded. Restart to apply.".into(),
+    })
+}
+
+#[tauri::command]
+pub async fn install_app_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No update available".to_string())?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
 }

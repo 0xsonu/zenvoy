@@ -25,6 +25,14 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/0xsonu/zenvoy/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3NzRFRTYxRDhFRDg2OEUKUldTT2h1M1lZZTUwRjRiTGRQRnJzRkRQVDFwc2FENUdndExIVG1sNGhlYm9lRVpsOUdqblZBbkwK"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -34,6 +42,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": "v1Compatible"
   }
 }
