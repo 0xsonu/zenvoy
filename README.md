@@ -17,9 +17,19 @@ Website: [](https://)
 
 ## Install
 
-### Desktop (Tauri)
+Download the latest release from the [Releases page](https://github.com/0xsonu/zenvoy/releases).
 
-Build from source:
+### macOS
+
+After installing, macOS may show "Zenvoy is damaged and can't be opened" because the app is not notarized with Apple. To fix this, run:
+
+```bash
+xattr -cr /Applications/Zenvoy.app
+```
+
+Or right-click the app → Open → Open to bypass Gatekeeper on first launch.
+
+### Desktop (Build from source)
 
 ```bash
 npm ci
