@@ -1,15 +1,18 @@
 name: Release
 
 on:
-  release:
-    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v0.1.1)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   validate:
-    if: github.event.release.draft == true
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -45,8 +48,26 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt -- --check
 
-  build-desktop:
+  create-release:
     needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.version }}" \
+            --target main \
+            --title "Zenvoy ${{ inputs.version }}" \
+            --notes "Building..." \
+            --draft
+
+  build-desktop:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -104,17 +125,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.event.release.tag_name }}
-          releaseName: Zenvoy ${{ github.event.release.tag_name }}
+          tagName: ${{ inputs.version }}
+          releaseName: Zenvoy ${{ inputs.version }}
           releaseBody: ""
           releaseDraft: true
-          prerelease: ${{ contains(github.event.release.tag_name, 'alpha') || contains(github.event.release.tag_name, 'beta') || contains(github.event.release.tag_name, 'rc') }}
+          prerelease: ${{ contains(inputs.version, 'alpha') || contains(inputs.version, 'beta') || contains(inputs.version, 'rc') }}
           tauriScript: npx tauri
           args: ${{ matrix.args }}
           includeUpdaterJson: true
 
   build-server:
-    needs: validate
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -183,7 +204,7 @@ jobs:
       - name: Upload server binary
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ inputs.version }}
           draft: true
           files: ${{ matrix.asset_name }}
 
@@ -198,7 +219,7 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          TAG="${{ github.event.release.tag_name }}"
+          TAG="${{ inputs.version }}"
           PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${TAG}$" | head -1)
           if [ -z "$PREV_TAG" ]; then
             LOG=$(git log --pretty=format:"- %s")
@@ -210,21 +231,22 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.release.tag_name }}
-          draft: false
-          prerelease: ${{ contains(github.event.release.tag_name, 'alpha') || contains(github.event.release.tag_name, 'beta') || contains(github.event.release.tag_name, 'rc') }}
-          body: |
-            ## What's Changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(cat <<'NOTES'
+          ## What's Changed
 
-            ${{ steps.changelog.outputs.changelog }}
+          ${{ steps.changelog.outputs.changelog }}
 
-            ## Downloads
+          ## Downloads
 
-            | Platform | Desktop App | Server Binary |
-            |----------|-------------|---------------|
-            | macOS (Apple Silicon) | `Zenvoy_*_aarch64.dmg` | `zenvoy-server-aarch64-apple-darwin` |
-            | macOS (Intel) | `Zenvoy_*_x64.dmg` | `zenvoy-server-x86_64-apple-darwin` |
-            | Linux (x64) | `Zenvoy_*_amd64.AppImage` | `zenvoy-server-x86_64-unknown-linux-gnu` |
-            | Windows (x64) | `Zenvoy_*_x64-setup.exe` | `zenvoy-server-x86_64-pc-windows-msvc.exe` |
+          | Platform | Desktop App | Server Binary |
+          |----------|-------------|---------------|
+          | macOS (Apple Silicon) | `Zenvoy_*_aarch64.dmg` | `zenvoy-server-aarch64-apple-darwin` |
+          | macOS (Intel) | `Zenvoy_*_x64.dmg` | `zenvoy-server-x86_64-apple-darwin` |
+          | Linux (x64) | `Zenvoy_*_amd64.AppImage` | `zenvoy-server-x86_64-unknown-linux-gnu` |
+          | Windows (x64) | `Zenvoy_*_x64-setup.exe` | `zenvoy-server-x86_64-pc-windows-msvc.exe` |
+          NOTES
+          )
+          gh release edit "${{ inputs.version }}" --draft=false --notes "$BODY"
