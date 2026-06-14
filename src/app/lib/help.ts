@@ -698,8 +698,7 @@ export const HELP_SETTINGS: HelpSettingsSection[] = [
     items: [
       { label: 'App identity', detail: 'See the Zenvoy app icon, current version, and a short description of the app as a keyboard-first markdown workflow with Vim motions and plain local files.' },
       { label: 'Updates and releases', detail: 'Check for updates, download a newer build, install and relaunch, or jump straight to the latest GitHub release from inside the app.' },
-      { label: 'Website, community, and issue links', detail: 'The app now exposes direct links to the Zenvoy website, Discord, GitHub repository, and issue tracker so support paths stay discoverable.' },
-      { label: 'Lumary Labs', detail: 'The About section links to Lumary Labs at lumarylabs.com so company details stay easy to find from inside the app.' }
+      { label: 'Website, community, and issue links', detail: 'The app now exposes direct links to the Zenvoy website, Discord, GitHub repository, and issue tracker so support paths stay discoverable.' }
     ]
   }
 ]
