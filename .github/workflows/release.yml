@@ -48,26 +48,8 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt -- --check
 
-  create-release:
-    needs: validate
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Create draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${{ inputs.version }}" \
-            --target main \
-            --title "Zenvoy ${{ inputs.version }}" \
-            --notes "Building..." \
-            --draft
-
   build-desktop:
-    needs: create-release
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -135,7 +117,7 @@ jobs:
           includeUpdaterJson: true
 
   build-server:
-    needs: create-release
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -235,19 +217,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BODY=$(cat <<'NOTES'
-          ## What's Changed
-
+          gh release edit "${{ inputs.version }}" \
+            --draft=false \
+            --notes "## What's Changed
           ${{ steps.changelog.outputs.changelog }}
 
           ## Downloads
 
           | Platform | Desktop App | Server Binary |
           |----------|-------------|---------------|
-          | macOS (Apple Silicon) | `Zenvoy_*_aarch64.dmg` | `zenvoy-server-aarch64-apple-darwin` |
-          | macOS (Intel) | `Zenvoy_*_x64.dmg` | `zenvoy-server-x86_64-apple-darwin` |
-          | Linux (x64) | `Zenvoy_*_amd64.AppImage` | `zenvoy-server-x86_64-unknown-linux-gnu` |
-          | Windows (x64) | `Zenvoy_*_x64-setup.exe` | `zenvoy-server-x86_64-pc-windows-msvc.exe` |
-          NOTES
-          )
-          gh release edit "${{ inputs.version }}" --draft=false --notes "$BODY"
+          | macOS (Apple Silicon) | \`Zenvoy_*_aarch64.dmg\` | \`zenvoy-server-aarch64-apple-darwin\` |
+          | macOS (Intel) | \`Zenvoy_*_x64.dmg\` | \`zenvoy-server-x86_64-apple-darwin\` |
+          | Linux (x64) | \`Zenvoy_*_amd64.AppImage\` | \`zenvoy-server-x86_64-unknown-linux-gnu\` |
+          | Windows (x64) | \`Zenvoy_*_x64-setup.exe\` | \`zenvoy-server-x86_64-pc-windows-msvc.exe\` |"
