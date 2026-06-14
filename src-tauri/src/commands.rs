@@ -1056,9 +1056,7 @@ pub fn get_app_update_state() -> AppUpdateState {
 
 #[tauri::command]
 pub async fn check_for_app_updates(app: tauri::AppHandle) -> Result<AppUpdateState, String> {
-    let updater = app
-        .updater()
-        .map_err(|e| e.to_string())?;
+    let updater = app.updater().map_err(|e| e.to_string())?;
     match updater.check().await {
         Ok(Some(update)) => Ok(AppUpdateState {
             phase: "available".into(),
@@ -1091,7 +1089,8 @@ pub async fn check_for_app_updates(app: tauri::AppHandle) -> Result<AppUpdateSta
 #[tauri::command]
 pub async fn check_for_app_updates_with_ui(app: tauri::AppHandle) -> Result<(), String> {
     let state = check_for_app_updates(app.clone()).await?;
-    app.emit("app-update-state", &state).map_err(|e| e.to_string())?;
+    app.emit("app-update-state", &state)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
