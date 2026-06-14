@@ -9,10 +9,41 @@ permissions:
   contents: write
 
 jobs:
-  create-release:
+  validate:
     runs-on: ubuntu-22.04
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npx vite build
+
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      - name: Run clippy
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
+
+  create-release:
+    needs: validate
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,16 +54,15 @@ jobs:
         run: |
           PREV_TAG=$(git tag --sort=-creatordate | sed -n '2p')
           if [ -z "$PREV_TAG" ]; then
-            LOG=$(git log --pretty=format:"- %s" HEAD)
+            LOG=$(git log --pretty=format:"- %s")
           else
             LOG=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD)
           fi
-          echo "changelog<<CHANGELOG_EOF" >> $GITHUB_OUTPUT
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
           echo "$LOG" >> $GITHUB_OUTPUT
-          echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create Release
-        id: create_release
+      - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -41,24 +71,10 @@ jobs:
             ## What's Changed
 
             ${{ steps.changelog.outputs.changelog }}
+          draft: true
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
 
-            ## Downloads
-
-            | Platform | File |
-            |----------|------|
-            | macOS (Apple Silicon) | `Zenvoy_aarch64.dmg` |
-            | macOS (Intel) | `Zenvoy_x64.dmg` |
-            | Linux (x64 deb) | `zenvoy_amd64.deb` |
-            | Linux (x64 AppImage) | `Zenvoy_amd64.AppImage` |
-            | Windows (x64) | `Zenvoy_x64-setup.exe` |
-            | Server (macOS arm64) | `zenvoy-server-aarch64-apple-darwin` |
-            | Server (macOS x64) | `zenvoy-server-x86_64-apple-darwin` |
-            | Server (Linux x64) | `zenvoy-server-x86_64-unknown-linux-gnu` |
-            | Server (Windows x64) | `zenvoy-server-x86_64-pc-windows-msvc.exe` |
-          draft: false
-          prerelease: false
-
-  build-tauri:
+  build-desktop:
     needs: create-release
     strategy:
       fail-fast: false
@@ -98,10 +114,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
 
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and release Tauri app
+      - name: Build and upload Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,8 +134,8 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Zenvoy ${{ github.ref_name }}
           releaseBody: ""
-          releaseDraft: false
-          prerelease: false
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           tauriScript: npx tauri
           args: ${{ matrix.args }}
 
@@ -158,6 +183,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
 
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
       - name: Install frontend dependencies
         run: npm ci
 
@@ -168,9 +202,24 @@ jobs:
         working-directory: src-tauri
         run: cargo build --release --bin zenvoy-server --target ${{ matrix.target }}
 
-      - name: Upload server binary to release
+      - name: Rename binary
+        shell: bash
+        run: cp src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset_name }}
+
+      - name: Upload server binary
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}
-          asset_name: ${{ matrix.asset_name }}
+          draft: true
+          files: ${{ matrix.asset_name }}
+
+  publish:
+    needs: [build-desktop, build-server]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
