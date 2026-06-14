@@ -1,15 +1,15 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [created]
 
 permissions:
   contents: write
 
 jobs:
   validate:
+    if: github.event.release.draft == true
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -41,41 +41,12 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
-  create-release:
-    needs: validate
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          PREV_TAG=$(git tag --sort=-creatordate | sed -n '2p')
-          if [ -z "$PREV_TAG" ]; then
-            LOG=$(git log --pretty=format:"- %s")
-          else
-            LOG=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD)
-          fi
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$LOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Create draft release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Zenvoy ${{ github.ref_name }}
-          body: |
-            ## What's Changed
-
-            ${{ steps.changelog.outputs.changelog }}
-          draft: true
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt -- --check
 
   build-desktop:
-    needs: create-release
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -133,17 +104,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Zenvoy ${{ github.ref_name }}
+          tagName: ${{ github.event.release.tag_name }}
+          releaseName: Zenvoy ${{ github.event.release.tag_name }}
           releaseBody: ""
           releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          prerelease: ${{ contains(github.event.release.tag_name, 'alpha') || contains(github.event.release.tag_name, 'beta') || contains(github.event.release.tag_name, 'rc') }}
           tauriScript: npx tauri
           args: ${{ matrix.args }}
           includeUpdaterJson: true
 
   build-server:
-    needs: create-release
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -212,7 +183,7 @@ jobs:
       - name: Upload server binary
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ github.event.release.tag_name }}
           draft: true
           files: ${{ matrix.asset_name }}
 
@@ -220,9 +191,40 @@ jobs:
     needs: [build-desktop, build-server]
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${TAG}$" | head -1)
+          if [ -z "$PREV_TAG" ]; then
+            LOG=$(git log --pretty=format:"- %s")
+          else
+            LOG=$(git log --pretty=format:"- %s" ${PREV_TAG}..${TAG})
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$LOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ github.event.release.tag_name }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          prerelease: ${{ contains(github.event.release.tag_name, 'alpha') || contains(github.event.release.tag_name, 'beta') || contains(github.event.release.tag_name, 'rc') }}
+          body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## Downloads
+
+            | Platform | Desktop App | Server Binary |
+            |----------|-------------|---------------|
+            | macOS (Apple Silicon) | `Zenvoy_*_aarch64.dmg` | `zenvoy-server-aarch64-apple-darwin` |
+            | macOS (Intel) | `Zenvoy_*_x64.dmg` | `zenvoy-server-x86_64-apple-darwin` |
+            | Linux (x64) | `Zenvoy_*_amd64.AppImage` | `zenvoy-server-x86_64-unknown-linux-gnu` |
+            | Windows (x64) | `Zenvoy_*_x64-setup.exe` | `zenvoy-server-x86_64-pc-windows-msvc.exe` |
