@@ -51,3 +51,87 @@ jobs:
       - name: Check formatting
         working-directory: src-tauri
         run: cargo fmt -- --check
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            binary: zenvoy-server
+            asset_name: zenvoy-server-aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            binary: zenvoy-server
+            asset_name: zenvoy-server-x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary: zenvoy-server
+            asset_name: zenvoy-server-x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: zenvoy-server.exe
+            asset_name: zenvoy-server-x86_64-pc-windows-msvc.exe
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npx vite build
+
+      - name: Build Tauri app
+        working-directory: src-tauri
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build server binary
+        working-directory: src-tauri
+        run: cargo build --release --bin zenvoy-server --target ${{ matrix.target }}
+
+      - name: Upload desktop binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/zenvoy*
+          retention-days: 7
+
+      - name: Rename server binary
+        shell: bash
+        run: cp src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset_name }}
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.target }}
+          path: ${{ matrix.asset_name }}
+          retention-days: 7
