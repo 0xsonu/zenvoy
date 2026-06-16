@@ -5999,3 +5999,7 @@ export const useStore = create<Store>((set, get) => {
   }
   }
 })
+
+
+// Expose store for Tauri drag-drop handler
+;(window as any).__ZENVOY_STORE__ = useStore

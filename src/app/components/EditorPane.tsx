@@ -976,6 +976,18 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     }
   }, [])
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent).detail as string
+      const view = viewRef.current
+      if (!view || !text) return
+      const pos = view.state.selection.main.head
+      view.dispatch({ changes: { from: pos, insert: text } })
+    }
+    window.addEventListener('zenvoy:insert-at-cursor', handler)
+    return () => window.removeEventListener('zenvoy:insert-at-cursor', handler)
+  }, [])
+
   const commitOutlineJump = useCallback((line: number) => {
     const view = viewRef.current
     if (!view) return false

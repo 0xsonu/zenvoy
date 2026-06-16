@@ -1076,7 +1076,8 @@ impl Vault {
         _note_path: &str,
         source_paths: &[String],
     ) -> VaultResult<Vec<ImportedAsset>> {
-        let dest_dir = self.root.join("attachements");
+        let note_subfolder = note_path_to_asset_folder(_note_path);
+        let dest_dir = self.root.join("attachements").join(&note_subfolder);
         fs::create_dir_all(&dest_dir)?;
         let mut results = Vec::new();
         for src in source_paths {
@@ -1085,11 +1086,6 @@ impl Vault {
             if m.len() as i64 > self.max_asset_bytes {
                 return Err(VaultError::AssetTooLarge);
             }
-            let original_name = src_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
             let stem = src_path
                 .file_stem()
                 .unwrap_or_default()
@@ -1108,17 +1104,16 @@ impl Vault {
             fs::copy(src_path, &dest)?;
             let dest_name = dest.file_name().unwrap().to_string_lossy().to_string();
             let kind = kind_for_ext(&ext);
-            let markdown = if kind == "image" {
-                format!("![{}](../attachements/{})", original_name, dest_name)
+            let rel_str = if note_subfolder.is_empty() {
+                format!("attachements/{}", dest_name)
             } else {
-                format!("[{}](../attachements/{})", original_name, dest_name)
+                format!("attachements/{}/{}", note_subfolder, dest_name)
             };
-            let rel = dest.strip_prefix(&self.root).unwrap();
-            let rel_str = rel
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join("/");
+            let markdown = if kind == "image" {
+                format!("![[{}]]", rel_str)
+            } else {
+                format!("[[{}]]", rel_str)
+            };
             results.push(ImportedAsset {
                 name: dest_name,
                 path: rel_str,
@@ -2410,7 +2405,7 @@ mod tests {
             .unwrap();
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].kind, "image");
-        assert!(imported[0].markdown.contains("![photo.png]"));
+        assert!(imported[0].markdown.contains("![[attachements/welcome/photo.png]]"));
         let assets = vault.list_assets().unwrap();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].kind, "image");
@@ -2738,4 +2733,25 @@ mod tests {
         let templates = vault.list_templates().unwrap();
         assert!(templates.is_empty());
     }
+}
+
+/// Convert a note path like "inbox/Hello World.md" to a folder name "hello-world"
+pub fn note_path_to_asset_folder(note_path: &str) -> String {
+    let name = std::path::Path::new(note_path)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let result: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    result.trim_matches('-').to_string()
 }

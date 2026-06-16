@@ -183,7 +183,21 @@ export function createTauriBridge(): ZenBridge {
 
     // ── Assets ───────────────────────────────────────────────────────
     importFilesToNote: (notePath, sourcePaths) => invoke<ImportedAsset[]>('import_files_to_note', { notePath, sourcePaths }),
-    importPastedImage: (input) => invoke<ImportedAsset>('import_pasted_image', { input }),
+    importPastedImage: async (input) => {
+      const bytes = new Uint8Array(input.data instanceof ArrayBuffer ? input.data : input.data)
+      let binary = ''
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+      const dataBase64 = btoa(binary)
+      const ext = (input.mimeType || 'image/png').split('/')[1] || 'png'
+      const now = new Date()
+      const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}${String(now.getMilliseconds()).padStart(3,'0')}`
+      const filename = `pasted_image_${ts}.${ext}`
+      const store = (window as any).__ZENVOY_STORE__
+      const notePath = store?.getState?.()?.selectedPath || ''
+      return invoke<ImportedAsset>('import_pasted_image', {
+        input: { notePath, dataBase64, filename }
+      })
+    },
     renameAsset: (relPath, nextName) => invoke<AssetMeta>('rename_asset', { relPath, nextName }),
     moveAsset: (relPath, targetDir) => invoke<AssetMeta>('move_asset', { relPath, targetDir }),
     duplicateAsset: (relPath) => invoke<AssetMeta>('duplicate_asset', { relPath }),
@@ -200,15 +214,31 @@ export function createTauriBridge(): ZenBridge {
     revealAssetsDir: () => invoke<void>('reveal_assets_dir'),
 
     // ── File path helpers ────────────────────────────────────────────
-    getPathForFile: (_file) => null,
+    getPathForFile: (_file) => {
+      // Tauri's onDragDropEvent caches paths before the browser drop event
+      const paths = (window as any).__TAURI_DROP_PATHS__ as string[] | undefined
+      if (!paths || paths.length === 0) return null
+      const name = _file.name
+      return paths.find(p => p.endsWith(name)) || paths.shift() || null
+    },
     resolveLocalAssetUrl: (vaultRoot, notePath, href) => {
-      const noteDir = notePath.substring(0, notePath.lastIndexOf('/'))
-      const absPath = `${vaultRoot}/${noteDir}/${href}`
-      return window.__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
+      // If href contains a path separator, resolve from vault root
+      if (href.includes('/')) {
+        const absPath = `${vaultRoot}/${href}`
+        return (window as any).__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
+      }
+      // Otherwise resolve as filename: try attachements/<note-folder>/<filename> first, then attachements/<filename>
+      const noteName = notePath.substring(notePath.lastIndexOf('/') + 1).replace(/\.md$/i, '')
+      const noteFolder = noteName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+      const noteSubPath = `${vaultRoot}/attachements/${noteFolder}/${href}`
+      const fallbackPath = `${vaultRoot}/attachements/${href}`
+      // Try note-specific folder first, fall back to root attachements
+      return (window as any).__TAURI_INTERNALS__.convertFileSrc(noteSubPath, 'asset')
+        || (window as any).__TAURI_INTERNALS__.convertFileSrc(fallbackPath, 'asset')
     },
     resolveVaultAssetUrl: (vaultRoot, assetPath) => {
       const absPath = `${vaultRoot}/${assetPath}`
-      return window.__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
+      return (window as any).__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
     },
 
     // ── Events ───────────────────────────────────────────────────────
@@ -261,3 +291,33 @@ export function createTauriBridge(): ZenBridge {
     clipboardReadText: () => '',
   }
 }
+
+// Install Tauri native drag-drop listener to handle file imports directly
+import('@tauri-apps/api/webview').then(({ getCurrentWebview }) => {
+  getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === 'enter') {
+      (window as any).__TAURI_DROP_PATHS__ = (event.payload as any).paths || []
+    } else if (event.payload.type === 'drop') {
+      const paths: string[] = (event.payload as any).paths || []
+      if (paths.length === 0) return
+      ;(window as any).__TAURI_DROP_PATHS__ = paths
+      setTimeout(async () => {
+        const store = (window as any).__ZENVOY_STORE__
+        const selectedPath = store?.getState?.()?.selectedPath
+        if (!selectedPath || paths.length === 0) return
+        try {
+          const imported = await invoke<any[]>('import_files_to_note', { notePath: selectedPath, sourcePaths: paths })
+          if (imported && imported.length > 0) {
+            const markdown = imported.map((a: any) => a.markdown).join('\n')
+            window.dispatchEvent(new CustomEvent('zenvoy:insert-at-cursor', { detail: markdown }))
+          }
+          store?.getState?.()?.refreshAssets?.()
+        } catch (err: any) {
+          console.error('[drag-drop] import failed:', err)
+        }
+      }, 0)
+    } else if (event.payload.type === 'leave') {
+      (window as any).__TAURI_DROP_PATHS__ = []
+    }
+  })
+}).catch(() => {})

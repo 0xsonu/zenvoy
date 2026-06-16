@@ -596,7 +596,9 @@ pub fn import_pasted_image(
     let data = base64::engine::general_purpose::STANDARD
         .decode(&input.data_base64)
         .map_err(|e| e.to_string())?;
-    let attachments_dir = v.root().join("attachements");
+    // Derive subfolder from note name
+    let note_subfolder = note_path_to_asset_folder(&input.note_path);
+    let attachments_dir = v.root().join("attachements").join(&note_subfolder);
     std::fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
     let stem = std::path::Path::new(&input.filename)
         .file_stem()
@@ -613,6 +615,17 @@ pub fn import_pasted_image(
     } else {
         ext
     };
+    // Sanitize: replace spaces and special chars with underscores
+    let stem: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     // Find unique path
     let dest = {
         let candidate = attachments_dir.join(format!("{}.{}", stem, ext));
@@ -621,7 +634,7 @@ pub fn import_pasted_image(
         } else {
             let mut i = 2;
             loop {
-                let p = attachments_dir.join(format!("{} {}.{}", stem, i, ext));
+                let p = attachments_dir.join(format!("{}_{}.{}", stem, i, ext));
                 if !p.exists() {
                     break p;
                 }
@@ -631,19 +644,23 @@ pub fn import_pasted_image(
     };
     std::fs::write(&dest, &data).map_err(|e| e.to_string())?;
     let dest_name = dest.file_name().unwrap().to_string_lossy().to_string();
-    let rel = dest.strip_prefix(v.root()).unwrap();
-    let rel_str = rel
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .collect::<Vec<_>>()
-        .join("/");
-    let markdown = format!("![{}](../attachements/{})", input.filename, dest_name);
+    let rel_str = if note_subfolder.is_empty() {
+        format!("attachements/{}", dest_name)
+    } else {
+        format!("attachements/{}/{}", note_subfolder, dest_name)
+    };
+    let markdown = format!("![[{}]]", rel_str);
     Ok(ImportedAsset {
         name: dest_name,
         path: rel_str,
         markdown,
         kind: "image".to_string(),
     })
+}
+
+/// Convert a note path like "inbox/Hello World.md" to a folder name "hello-world"
+fn note_path_to_asset_folder(note_path: &str) -> String {
+    crate::vault::note_path_to_asset_folder(note_path)
 }
 
 #[tauri::command]
