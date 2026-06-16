@@ -201,10 +201,15 @@ export function createTauriBridge(): ZenBridge {
 
     // ── File path helpers ────────────────────────────────────────────
     getPathForFile: (_file) => null,
-    resolveLocalAssetUrl: (vaultRoot, notePath, href) =>
-      `asset://localhost/${encodeURIComponent(vaultRoot)}/${notePath}/../${href}`,
-    resolveVaultAssetUrl: (vaultRoot, assetPath) =>
-      `asset://localhost/${encodeURIComponent(vaultRoot)}/${assetPath}`,
+    resolveLocalAssetUrl: (vaultRoot, notePath, href) => {
+      const noteDir = notePath.substring(0, notePath.lastIndexOf('/'))
+      const absPath = `${vaultRoot}/${noteDir}/${href}`
+      return window.__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
+    },
+    resolveVaultAssetUrl: (vaultRoot, assetPath) => {
+      const absPath = `${vaultRoot}/${assetPath}`
+      return window.__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
+    },
 
     // ── Events ───────────────────────────────────────────────────────
     onVaultChange: (cb) => tauriListen<VaultChangeEvent>('vault-change', cb),

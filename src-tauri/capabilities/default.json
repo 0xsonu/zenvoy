@@ -6,6 +6,10 @@
     "core:default",
     "core:webview:allow-create-webview-window",
     "core:webview:allow-print",
-    "core:event:default"
+    "core:event:default",
+    {
+      "identifier": "fs:scope",
+      "allow": ["**"]
+    }
   ]
 }
