@@ -210,7 +210,7 @@ export function createTauriBridge(): ZenBridge {
     onVaultChange: (cb) => tauriListen<VaultChangeEvent>('vault-change', cb),
     onOpenSettings: (cb) => tauriListen<void>('open-settings', () => cb()),
     onOpenNoteRequested: (cb) => tauriListen<string>('open-note-requested', cb),
-    notifyRendererReady: () => { invoke('notify_renderer_ready') },
+    notifyRendererReady: () => {},
     onAppUpdateState: (cb) => tauriListen<AppUpdateState>('app-update-state', cb),
 
     // ── Window management ────────────────────────────────────────────

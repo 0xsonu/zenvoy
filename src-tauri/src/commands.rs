@@ -1009,6 +1009,56 @@ pub async fn render_tikz(source: String) -> Result<serde_json::Value, String> {
     }
 }
 
+// ─── Export PDF ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn export_note_pdf(
+    rel_path: String,
+    app: tauri::AppHandle,
+    webview: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
+    let encoded: String = rel_path
+        .bytes()
+        .flat_map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![b as char]
+            }
+            _ => {
+                let hi = "0123456789ABCDEF".as_bytes()[(b >> 4) as usize] as char;
+                let lo = "0123456789ABCDEF".as_bytes()[(b & 0xf) as usize] as char;
+                vec!['%', hi, lo]
+            }
+        })
+        .collect();
+    let label = format!(
+        "pdf-export-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+
+    let base_url = webview.url().map_err(|e| e.to_string())?;
+    let scheme = base_url.scheme();
+
+    let webview_url = if scheme == "http" || scheme == "https" {
+        // Dev mode or external URL — use External
+        let mut url = base_url;
+        url.set_query(Some(&format!("exportNote={}", encoded)));
+        tauri::WebviewUrl::External(url)
+    } else {
+        // Production: tauri:// protocol — use App path with query
+        tauri::WebviewUrl::App(format!("?exportNote={}", encoded).into())
+    };
+
+    tauri::WebviewWindowBuilder::new(&app, &label, webview_url)
+        .title("Export PDF")
+        .inner_size(900.0, 700.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(None)
+}
+
 // ─── Updater ──────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]

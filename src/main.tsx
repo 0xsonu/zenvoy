@@ -1,6 +1,7 @@
 import React, { lazy, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { installZenBridge } from './bridge/contract'
+import { renderExportNoteWindow } from './export-window'
 import './app/styles/index.css'
 
 const App = lazy(() => import('./app/App'))
@@ -49,6 +50,13 @@ async function boot() {
   }
 
   const params = new URLSearchParams(window.location.search)
+  const exportNotePath = params.get('exportNote')
+  if (exportNotePath) {
+    renderExportNoteWindow(root, exportNotePath)
+    booted = true
+    return
+  }
+
   const isFloating = params.get('floating') === '1'
   const isQuickCapture = params.get('quickCapture') === '1'
   const isExternalFile = params.get('externalFile') !== null
