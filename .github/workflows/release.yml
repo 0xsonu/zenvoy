@@ -131,9 +131,9 @@ jobs:
             binary: zenvoy-server
             asset_name: zenvoy-server-x86_64-apple-darwin
           - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             binary: zenvoy-server
-            asset_name: zenvoy-server-x86_64-unknown-linux-gnu
+            asset_name: zenvoy-server-x86_64-unknown-linux-musl
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             binary: zenvoy-server.exe
@@ -158,7 +158,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev musl-tools
 
       - name: Cache cargo
         uses: actions/cache@v4

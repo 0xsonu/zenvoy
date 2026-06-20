@@ -2405,7 +2405,9 @@ mod tests {
             .unwrap();
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].kind, "image");
-        assert!(imported[0].markdown.contains("![[attachements/welcome/photo.png]]"));
+        assert!(imported[0]
+            .markdown
+            .contains("![[attachements/welcome/photo.png]]"));
         let assets = vault.list_assets().unwrap();
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].kind, "image");
