@@ -5,6 +5,8 @@ import { extractTags } from '../lib/tags'
 import { TagIcon, CloseIcon, DocumentIcon } from './icons'
 import { advanceSequence, getKeymapBinding, matchesSequenceToken } from '../lib/keymaps'
 import { isPrimaryNotesAtRoot, noteFolderSubpath } from '../lib/vault-layout'
+import { isImeComposing } from '../lib/ime'
+import { isAppOverlayOpen } from '../lib/overlay-open'
 
 function formatDate(ms: number): string {
   const d = new Date(ms)
@@ -34,6 +36,7 @@ export function TagView(): JSX.Element {
   const closeTagView = useStore((s) => s.closeTagView)
   const selectNote = useStore((s) => s.selectNote)
   const keymapOverrides = useStore((s) => s.keymapOverrides)
+  const vimMode = useStore((s) => s.vimMode)
   const amActive = useStore(isTagsViewActive)
 
   const [filter, setFilter] = useState('')
@@ -190,6 +193,12 @@ export function TagView(): JSX.Element {
   useEffect(() => {
     if (!amActive) return
     const handler = (e: KeyboardEvent): void => {
+      // A modal/menu owns the keyboard while open — don't fire list shortcuts
+      // through it. (songgenqing report)
+      if (isAppOverlayOpen()) return
+      // While the Vim hint overlay is open it owns the keyboard; don't let
+      // tag navigation (or Esc closing the view) steal its keys. (#151)
+      if (document.querySelector('[data-vim-hint-overlay]')) return
       const focused = document.activeElement as HTMLElement | null
       if (focused) {
         const t = focused.tagName
@@ -199,50 +208,53 @@ export function TagView(): JSX.Element {
 
       const k = e.key
       const overrides = keymapOverrides
+      // When Vim mode is off, the single-key Vim shortcuts (j/k/gg/G/o//…) are
+      // disabled — only arrows/Enter/Escape navigate. (songgenqing report)
+      const seq = (id: Parameters<typeof matchesSequenceToken>[2]): boolean =>
+        vimMode && matchesSequenceToken(e, overrides, id)
       const consume = (): void => {
         e.preventDefault()
         e.stopImmediatePropagation()
       }
 
       if (k === 'Escape') {
-        if (filter) {
-          consume()
-          setFilter('')
-          return
-        }
+        // Tags is a tab like a note tab — Esc clears an active filter but must
+        // never close the tab (other tabs don't close on Esc). Close with :q,
+        // the header ✕, or ⌘W. (#151)
         consume()
-        closeTagView()
+        if (filter) setFilter('')
         return
       }
-      if (matchesSequenceToken(e, overrides, 'nav.filter')) {
+      if (seq('nav.filter')) {
         consume()
         filterRef.current?.focus()
         filterRef.current?.select()
         return
       }
-      if (matchesSequenceToken(e, overrides, 'nav.localEx')) {
+      if (seq('nav.localEx')) {
         consume()
         setExValue('')
         setExOpen(true)
         requestAnimationFrame(() => exRef.current?.focus())
         return
       }
-      if (matchesSequenceToken(e, overrides, 'nav.moveDown') || k === 'ArrowDown') {
+      if (seq('nav.moveDown') || k === 'ArrowDown') {
         consume()
         moveCursor(1)
         return
       }
-      if (matchesSequenceToken(e, overrides, 'nav.moveUp') || k === 'ArrowUp') {
+      if (seq('nav.moveUp') || k === 'ArrowUp') {
         consume()
         moveCursor(-1)
         return
       }
-      if (matchesSequenceToken(e, overrides, 'nav.jumpBottom')) {
+      if (seq('nav.jumpBottom')) {
         consume()
         setCursorIndex(filtered.length - 1)
         return
       }
       if (
+        vimMode &&
         advanceSequence(
           e,
           getKeymapBinding(overrides, 'nav.jumpTop'),
@@ -255,7 +267,7 @@ export function TagView(): JSX.Element {
       ) {
         return
       }
-      if ((k === 'Enter' || matchesSequenceToken(e, overrides, 'nav.openResult')) && current) {
+      if ((k === 'Enter' || seq('nav.openResult')) && current) {
         consume()
         void openCurrent()
       }
@@ -269,6 +281,7 @@ export function TagView(): JSX.Element {
     filtered.length,
     current,
     keymapOverrides,
+    vimMode,
     openCurrent,
     closeTagView
   ])
@@ -297,7 +310,7 @@ export function TagView(): JSX.Element {
                 if (filter) setFilter('')
                 else e.currentTarget.blur()
               }
-              if (e.key === 'Enter') e.currentTarget.blur()
+              if (e.key === 'Enter' && !isImeComposing(e)) e.currentTarget.blur()
             }}
             className="w-56 rounded-md border border-current/15 bg-current/5 px-2 py-1 text-xs outline-none focus:border-current/30"
           />
@@ -453,7 +466,7 @@ export function TagView(): JSX.Element {
         </form>
       ) : (
         <div className="border-t border-current/10 px-4 py-1.5 text-xs text-current/40">
-          j/k move · Enter/o open · click chips to toggle · / filter · : command · Esc close
+          j/k move · Enter/o open · click chips to toggle · / filter · : command · :q close
         </div>
       )}
     </div>

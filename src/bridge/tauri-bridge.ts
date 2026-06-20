@@ -128,6 +128,7 @@ export function createTauriBridge(): ZenBridge {
     setVaultSettings: (next) => invoke<VaultSettings>('set_vault_settings', { next }),
 
     // ── Notes ────────────────────────────────────────────────────────
+    rootContentHiddenByInboxMode: () => invoke<boolean>('root_content_hidden_by_inbox_mode'),
     listNotes: () => invoke<NoteMeta[]>('list_notes'),
     listNotesPage: undefined,
     listFolders: () => invoke<FolderEntry[]>('list_folders'),
@@ -167,7 +168,9 @@ export function createTauriBridge(): ZenBridge {
     writeNote: (relPath, body) => invoke<NoteMeta>('write_note', { relPath, body }),
     appendToNote: (relPath, body, position) => invoke<NoteMeta>('append_to_note', { relPath, body, position }),
     createNote: (folder, title, subpath) => invoke<NoteMeta>('create_note', { folder, title, subpath }),
+    createExcalidraw: (folder, subpath, title) => invoke<NoteMeta>('create_excalidraw', { folder, subpath, title }),
     renameNote: (relPath, nextTitle) => invoke<NoteMeta>('rename_note', { relPath, nextTitle }),
+    renameDatabase: (csvPath, newTitle) => invoke<string>('rename_database', { csvPath, newTitle }),
     deleteNote: (relPath) => invoke<void>('delete_note', { relPath }),
     moveToTrash: (relPath) => invoke<NoteMeta>('move_to_trash', { relPath }),
     restoreFromTrash: (relPath) => invoke<NoteMeta>('restore_from_trash', { relPath }),

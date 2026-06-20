@@ -10,10 +10,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { rankItems } from '../lib/fuzzy-score'
 import { isPaletteNextKey, isPalettePreviousKey } from '../lib/palette-nav'
+import { isImeComposing } from '../lib/ime'
 import { focusEditorNormalMode } from '../lib/editor-focus'
 import { BUILTIN_TEMPLATES } from '@shared/builtin-templates'
 import { mergeTemplates } from '@shared/template-files'
-import type { NoteTemplate } from '@bridge/templates'
+import type { NoteTemplate } from '@bridge-contract/templates'
 import { Modal } from './ui/Modal'
 
 export function TemplatePalette(): JSX.Element {
@@ -81,6 +82,8 @@ export function TemplatePalette(): JSX.Element {
             placeholder={mode === 'insert' ? 'Insert template into note…' : 'Create note from template…'}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
+              // While composing (IME), let the input own Enter/Arrows. (#183)
+              if (isImeComposing(e)) return
               if (isPaletteNextKey(e)) {
                 e.preventDefault()
                 e.stopPropagation()

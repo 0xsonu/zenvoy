@@ -20,7 +20,8 @@
       "@shared/*": ["src/shared/*"],
       "@app/*": ["src/app/*"],
       "@bridge/*": ["src/bridge/*"],
-      "@bridge-contract/*": ["src/bridge/*"]
+      "@bridge-contract/*": ["src/bridge/*"],
+      "@renderer/*": ["src/app/*"]
     }
   },
   "include": ["src"],

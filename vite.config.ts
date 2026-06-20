@@ -12,6 +12,7 @@ export default defineConfig({
       '@app': path.resolve(__dirname, 'src/app'),
       '@bridge': path.resolve(__dirname, 'src/bridge'),
       '@bridge-contract': path.resolve(__dirname, 'src/bridge'),
+      '@renderer': path.resolve(__dirname, 'src/app'),
     },
   },
   clearScreen: false,

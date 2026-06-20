@@ -448,6 +448,93 @@ impl Vault {
         }
     }
 
+    pub fn create_excalidraw(
+        &self,
+        folder: &NoteFolder,
+        subpath: &str,
+        title: Option<&str>,
+    ) -> VaultResult<NoteMeta> {
+        let stem = match title {
+            Some(t) => {
+                let s = sanitize_file_stem(t);
+                if s.is_empty() {
+                    "Untitled drawing".to_string()
+                } else {
+                    s
+                }
+            }
+            None => "Untitled drawing".to_string(),
+        };
+        let base = self.folder_root(folder)?;
+        let dir = if subpath.is_empty() {
+            base
+        } else {
+            base.join(subpath)
+        };
+        fs::create_dir_all(&dir)?;
+        let path = unique_path(&dir, &stem, "excalidraw");
+        let doc = serde_json::json!({
+            "type": "excalidraw",
+            "version": 2,
+            "source": "zenvoy",
+            "elements": [],
+            "appState": {},
+            "files": {}
+        });
+        fs::write(&path, serde_json::to_string_pretty(&doc).unwrap())?;
+        self.invalidate_caches();
+        self.read_meta(folder, &path)
+    }
+
+    pub fn rename_database(&self, csv_path: &str, new_title: &str) -> VaultResult<String> {
+        let safe_name = new_title
+            .trim()
+            .chars()
+            .map(|c| if "\\/:*?\"<>|".contains(c) { '-' } else { c })
+            .collect::<String>();
+        let safe_name = if safe_name.is_empty() {
+            "Untitled Database".to_string()
+        } else {
+            safe_name
+        };
+        let csv_abs = safepath::safe_join(&self.root, csv_path)?;
+        let form_dir = csv_abs
+            .parent()
+            .ok_or_else(|| VaultError::NotFound(csv_path.to_string()))?;
+        let parent = form_dir
+            .parent()
+            .ok_or_else(|| VaultError::NotFound(csv_path.to_string()))?;
+        let new_dir_name = format!("{}.form", safe_name);
+        let new_dir = unique_path_dir(parent, &new_dir_name);
+        fs::rename(form_dir, &new_dir)?;
+        let csv_name = csv_abs.file_name().unwrap().to_string_lossy().to_string();
+        let new_csv = new_dir.join(&csv_name);
+        let rel = new_csv
+            .strip_prefix(&self.root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        self.invalidate_caches();
+        Ok(rel)
+    }
+
+    pub fn root_content_hidden_by_inbox_mode(&self) -> VaultResult<bool> {
+        let settings = self.get_settings()?;
+        if settings.primary_notes_location != "inbox" {
+            return Ok(false);
+        }
+        // Check if vault looks like it was originally using root layout
+        let inbox_dir = self.root.join("inbox");
+        let has_root_md = fs::read_dir(&self.root)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
+            })
+            .unwrap_or(false);
+        Ok(has_root_md && inbox_dir.exists())
+    }
+
     pub fn delete_note(&self, rel: &str) -> VaultResult<()> {
         let abs = safepath::safe_join(&self.root, rel)?;
         if !abs.is_file() {
@@ -1720,6 +1807,21 @@ fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let mut i = 2;
     loop {
         let p = dir.join(format!("{} {}.{}", stem, i, ext));
+        if !p.exists() {
+            return p;
+        }
+        i += 1;
+    }
+}
+
+fn unique_path_dir(parent: &Path, name: &str) -> PathBuf {
+    let candidate = parent.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let mut i = 2;
+    loop {
+        let p = parent.join(format!("{} {}", name, i));
         if !p.exists() {
             return p;
         }

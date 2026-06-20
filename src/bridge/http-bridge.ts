@@ -1114,6 +1114,8 @@ export const httpBridge: ZenBridge = {
   getVaultSettings,
   setVaultSettings,
 
+  rootContentHiddenByInboxMode: async () => false,
+
   listNotes,
   listFolders,
   listAssets,
@@ -1140,7 +1142,9 @@ export const httpBridge: ZenBridge = {
   writeNote,
   appendToNote,
   createNote,
+  createExcalidraw: async () => { throw new Error('Excalidraw not supported in web mode') },
   renameNote,
+  renameDatabase: async () => { throw new Error('renameDatabase not supported in web mode') },
   deleteNote,
   moveToTrash,
   restoreFromTrash,

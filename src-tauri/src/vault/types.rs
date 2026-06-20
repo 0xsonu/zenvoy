@@ -52,6 +52,10 @@ pub struct VaultSettings {
     pub weekly_notes: WeeklyNotesSettings,
     #[serde(default)]
     pub folder_icons: HashMap<String, String>,
+    #[serde(default)]
+    pub folder_colors: HashMap<String, String>,
+    #[serde(default)]
+    pub favorites: Vec<String>,
 }
 
 impl Default for VaultSettings {
@@ -61,8 +65,20 @@ impl Default for VaultSettings {
             daily_notes: DailyNotesSettings::default(),
             weekly_notes: WeeklyNotesSettings::default(),
             folder_icons: HashMap::new(),
+            folder_colors: HashMap::new(),
+            favorites: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DateNotePatternSettings {
+    pub directory: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,8 +86,18 @@ impl Default for VaultSettings {
 pub struct DailyNotesSettings {
     pub enabled: bool,
     pub directory: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub template_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_patterns: Option<Vec<DateNotePatternSettings>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks_due_on_note_date: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollover_unfinished_tasks: Option<bool>,
 }
 
 impl Default for DailyNotesSettings {
@@ -79,7 +105,12 @@ impl Default for DailyNotesSettings {
         Self {
             enabled: false,
             directory: "Daily Notes".to_string(),
-            template_id: String::new(),
+            title_pattern: Some("yyyy-MM-dd".to_string()),
+            locale: Some("system".to_string()),
+            legacy_patterns: None,
+            template_id: None,
+            tasks_due_on_note_date: Some(true),
+            rollover_unfinished_tasks: Some(false),
         }
     }
 }
@@ -89,8 +120,14 @@ impl Default for DailyNotesSettings {
 pub struct WeeklyNotesSettings {
     pub enabled: bool,
     pub directory: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub template_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_patterns: Option<Vec<DateNotePatternSettings>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
 }
 
 impl Default for WeeklyNotesSettings {
@@ -98,7 +135,10 @@ impl Default for WeeklyNotesSettings {
         Self {
             enabled: false,
             directory: "Weekly Notes".to_string(),
-            template_id: String::new(),
+            title_pattern: Some("yyyy-'W'ww".to_string()),
+            locale: Some("system".to_string()),
+            legacy_patterns: None,
+            template_id: None,
         }
     }
 }

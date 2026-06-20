@@ -6,7 +6,7 @@ import {
   parseFrontmatter,
   slugifyTemplateName
 } from '@shared/template-files'
-import type { NoteTemplate } from '@bridge/templates'
+import type { NoteTemplate } from '@bridge-contract/templates'
 
 describe('parseFrontmatter', () => {
   it('splits flat scalar frontmatter from the body', () => {

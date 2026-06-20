@@ -503,6 +503,36 @@ pub fn rename_note(
 }
 
 #[tauri::command]
+pub fn create_excalidraw(
+    folder: NoteFolder,
+    subpath: Option<String>,
+    title: Option<String>,
+    state: State<'_, TauriAppState>,
+) -> Result<NoteMeta, String> {
+    vault(&state)?
+        .create_excalidraw(&folder, subpath.as_deref().unwrap_or(""), title.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn rename_database(
+    csv_path: String,
+    new_title: String,
+    state: State<'_, TauriAppState>,
+) -> Result<String, String> {
+    vault(&state)?
+        .rename_database(&csv_path, &new_title)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn root_content_hidden_by_inbox_mode(state: State<'_, TauriAppState>) -> Result<bool, String> {
+    vault(&state)?
+        .root_content_hidden_by_inbox_mode()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn delete_note(rel_path: String, state: State<'_, TauriAppState>) -> Result<(), String> {
     vault(&state)?
         .delete_note(&rel_path)

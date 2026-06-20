@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   isArchiveViewActive,
+  isAssetsViewActive,
   isHelpViewActive,
   isQuickNotesViewActive,
   isTagsViewActive,
@@ -8,10 +9,11 @@ import {
   isTrashViewActive,
   useStore,
 } from "../store";
+import { Button } from "./ui/Button";
 import { confirmMoveToTrash } from "../lib/confirm-trash";
 import { buildMoveNotePrompt, parseMoveNoteTarget } from "../lib/move-note";
 import { extractTags } from "../lib/tags";
-import type { AssetMeta, FolderEntry, FolderIconId, NoteFolder, NoteMeta } from "@shared/ipc";
+import type { AssetMeta, FolderColorId, FolderEntry, FolderIconId, NoteFolder, NoteMeta } from "@shared/ipc";
 import type { NoteSortOrder } from "../store";
 import { isArchiveTabPath } from "@shared/archive";
 import { isTrashTabPath } from "@shared/trash";
@@ -23,8 +25,11 @@ import {
   ChevronRightIcon,
   CheckSquareIcon,
   CloseIcon,
+  DatabaseIcon,
   DocumentIcon,
+  ExcalidrawIcon,
   ExpandAllIcon,
+  PaperclipIcon,
   FolderPlusIcon,
   NotePlusIcon,
   PanelLeftIcon,
@@ -40,15 +45,23 @@ import { ResizeHandle } from "./ResizeHandle";
 import { VaultBadge } from "./VaultBadge";
 import { confirmApp } from '../lib/confirm-requests'
 import { promptApp } from '../lib/prompt-requests'
+import { naturalCompare } from '../lib/natural-sort'
 import { resolveQuickNoteTitle } from "../lib/quick-note-title";
 import { recordRendererPerf } from "../lib/perf";
+import { DEFAULT_DAILY_NOTES_DIRECTORY, DEFAULT_WEEKLY_NOTES_DIRECTORY } from "@shared/ipc";
 import {
   assetFolderSubpath,
+  classifyDateNote,
+  dateNoteFolderMayBelongToDatePattern,
+  dateNoteDirectoryDisplayLabel,
+  favoriteFolderKey,
   folderIconKey,
+  isFavoriteFolderKey,
   isPrimaryNotesAtRoot,
   folderForVaultRelativePath,
   normalizeVaultSettings,
   noteFolderSubpath,
+  parseFavoriteFolderKey,
 } from "../lib/vault-layout";
 import {
   hasZenItem,
@@ -59,11 +72,20 @@ import {
 import { resolveSystemFolderLabels } from "../lib/system-folder-labels";
 import { assetTabPath } from "../lib/asset-tabs";
 import {
+  csvPathForFormDir,
+  FORM_DIR_SUFFIX,
+  formTitleFromDir,
+  isFormDirName,
+} from "@shared/databases";
+import { isExcalidrawPath } from "@shared/excalidraw";
+import {
   FolderGlyphIcon,
-  resolveFolderIconId,
+  iconOptionById,
   resolveFolderIconOption,
 } from "./FolderIcons";
 import { FolderIconPickerModal } from "./FolderIconPickerModal";
+import { colorGlyphClassById, resolveFolderColorGlyphClass } from "./FolderColors";
+import { FolderColorPickerModal } from "./FolderColorPickerModal";
 import {
   getSidebarEdgePrefetchPaths,
   getSidebarEntryLimitIncludingIndex,
@@ -78,6 +100,7 @@ import {
 } from "../lib/sidebar-scroll";
 import { buildVaultSwitcherEntries } from "../lib/vault-switcher";
 import { appUpdateBadgeLabel, useAppUpdateState } from "../lib/app-update-state";
+import { getISOWeekYear } from "../lib/template-render";
 
 const ACTIVE_TAG_PARSE_DELAY_MS = 220;
 const ACTIVE_TAG_PARSE_LARGE_BODY_CHARS = 120_000;
@@ -138,17 +161,26 @@ function remoteWorkspaceLabel(baseUrl: string | null): string {
 function SidebarGlyph({
   active,
   rowActive,
+  colorClass,
   children,
 }: {
   active: boolean;
   rowActive: boolean;
+  /** Custom resting tint (folder color); ignored while active/selected. */
+  colorClass?: string;
   children: JSX.Element;
 }): JSX.Element {
   return (
     <span
       className={[
         "flex h-5 w-5 shrink-0 items-center justify-center transition-colors",
-        active ? "text-white" : rowActive ? "text-accent" : "text-ink-500 group-hover:text-ink-800",
+        colorClass
+          ? colorClass
+          : active
+            ? "text-ink-900"
+            : rowActive
+              ? "text-accent"
+              : "text-ink-400 group-hover:text-ink-700",
       ].join(" ")}
     >
       {children}
@@ -218,6 +250,11 @@ function vaultRelativeFolderPath(
 type SidebarSelectionItem =
   | { kind: "note"; path: string }
   | { kind: "folder"; folder: NoteFolder; subpath: string };
+
+/** A favorite resolved to a live note or folder for rendering. */
+type FavoriteItem =
+  | { kind: "note"; key: string; path: string; title: string; isDrawing: boolean }
+  | { kind: "folder"; key: string; folder: NoteFolder; subpath: string; label: string };
 
 function noteSelectionKey(path: string): string {
   return `note:${encodeURIComponent(path)}`;
@@ -349,6 +386,7 @@ export function Sidebar(): JSX.Element {
   const activeNote = useStore((s) => s.activeNote);
   const activeDirty = useStore((s) => s.activeDirty);
   const vaultSettings = useStore((s) => s.vaultSettings);
+  const rootContentHiddenByInboxMode = useStore((s) => s.rootContentHiddenByInboxMode);
   const view = useStore((s) => s.view);
   const assetFiles = useStore((s) => s.assetFiles);
   const setView = useStore((s) => s.setView);
@@ -362,11 +400,16 @@ export function Sidebar(): JSX.Element {
   const archiveViewActive = useStore(isArchiveViewActive);
   const openTrashView = useStore((s) => s.openTrashView);
   const trashViewActive = useStore(isTrashViewActive);
+  const openAssetsView = useStore((s) => s.openAssetsView);
+  const assetsViewActive = useStore(isAssetsViewActive);
+  const assetCount = useStore((s) => s.assetFiles.length);
   const openTagView = useStore((s) => s.openTagView);
   const selectedTags = useStore((s) => s.selectedTags);
   const tagsViewActive = useStore(isTagsViewActive);
   const setSearchOpen = useStore((s) => s.setSearchOpen);
   const createAndOpen = useStore((s) => s.createAndOpen);
+  const createDrawingAndOpen = useStore((s) => s.createDrawingAndOpen);
+  const toggleFavorite = useStore((s) => s.toggleFavorite);
   const createDatabase = useStore((s) => s.createDatabase);
   const createNoteInChosenFolder = useStore((s) => s.createNoteInChosenFolder);
   const openTemplatePaletteForFolder = useStore((s) => s.openTemplatePaletteForFolder);
@@ -486,6 +529,15 @@ export function Sidebar(): JSX.Element {
       }),
     [localVaults, remoteWorkspaceInfo, remoteWorkspaceProfiles, vault, workspaceMode],
   );
+  // Name the active vault in the header exactly as the switcher does. In remote
+  // mode vault.name is the server-side vault folder (e.g. "workspace"), not the
+  // connection the user named (e.g. "Home"); the current switcher entry already
+  // resolves that profile name, so reuse it to keep the header label and badge
+  // in sync with the switcher (#153).
+  const headerVaultName =
+    vaultSwitcherEntries.find((entry) => entry.current)?.name ??
+    vault?.name ??
+    "Zenvoy";
   const primaryNotesAtRoot = useMemo(
     () => isPrimaryNotesAtRoot(vaultSettings),
     [vaultSettings],
@@ -823,9 +875,16 @@ export function Sidebar(): JSX.Element {
     y: number;
     path: string;
   } | null>(null);
-  const [folderIconPicker, setFolderIconPicker] = useState<{
-    folder: NoteFolder;
-    subpath: string;
+  // Icon/color customization targets — keyed by an arbitrary string so it works
+  // for folders (`folder:subpath`), notes/databases (vault-relative path), and
+  // anything else. Folder keys contain ':'; note paths never do, so they coexist
+  // in the same folderIcons/folderColors maps without colliding.
+  const [iconPicker, setIconPicker] = useState<{
+    key: string;
+    label: string;
+  } | null>(null);
+  const [colorPicker, setColorPicker] = useState<{
+    key: string;
     label: string;
   } | null>(null);
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(
@@ -862,34 +921,30 @@ export function Sidebar(): JSX.Element {
     ],
   );
 
-  const openFolderIconPicker = useCallback(
-    (folder: NoteFolder, subpath: string, label: string) => {
-      setFolderMenu(null);
-      setFolderIconPicker({ folder, subpath, label });
-    },
-    [],
-  );
+  // The context menu closes itself on select (ContextMenu calls onClose first),
+  // so these just open the picker.
+  const openIconPicker = useCallback((key: string, label: string) => {
+    setIconPicker({ key, label });
+  }, []);
 
-  const saveFolderIcon = useCallback(
-    async (folder: NoteFolder, subpath: string, iconId: FolderIconId) => {
-      const key = folderIconKey(folder, subpath);
+  const saveIcon = useCallback(
+    async (key: string, iconId: FolderIconId) => {
       const nextSettings = normalizeVaultSettings({
         ...vaultSettings,
-        folderIcons: {
-          ...vaultSettings.folderIcons,
-          [key]: iconId,
-        },
+        folderIcons: { ...vaultSettings.folderIcons, [key]: iconId },
       });
       await setVaultSettings(nextSettings);
-      setFolderIconPicker(null);
+      setIconPicker(null);
     },
     [setVaultSettings, vaultSettings],
   );
 
-  const resetFolderIcon = useCallback(
-    async (folder: NoteFolder, subpath: string) => {
-      const key = folderIconKey(folder, subpath);
-      if (!(key in vaultSettings.folderIcons)) return;
+  const resetIcon = useCallback(
+    async (key: string) => {
+      if (!(key in vaultSettings.folderIcons)) {
+        setIconPicker(null);
+        return;
+      }
       const nextIcons = { ...vaultSettings.folderIcons };
       delete nextIcons[key];
       const nextSettings = normalizeVaultSettings({
@@ -897,7 +952,41 @@ export function Sidebar(): JSX.Element {
         folderIcons: nextIcons,
       });
       await setVaultSettings(nextSettings);
-      setFolderIconPicker(null);
+      setIconPicker(null);
+    },
+    [setVaultSettings, vaultSettings],
+  );
+
+  const openColorPicker = useCallback((key: string, label: string) => {
+    setColorPicker({ key, label });
+  }, []);
+
+  const saveColor = useCallback(
+    async (key: string, colorId: FolderColorId) => {
+      const nextSettings = normalizeVaultSettings({
+        ...vaultSettings,
+        folderColors: { ...vaultSettings.folderColors, [key]: colorId },
+      });
+      await setVaultSettings(nextSettings);
+      setColorPicker(null);
+    },
+    [setVaultSettings, vaultSettings],
+  );
+
+  const resetColor = useCallback(
+    async (key: string) => {
+      if (!(key in vaultSettings.folderColors)) {
+        setColorPicker(null);
+        return;
+      }
+      const nextColors = { ...vaultSettings.folderColors };
+      delete nextColors[key];
+      const nextSettings = normalizeVaultSettings({
+        ...vaultSettings,
+        folderColors: nextColors,
+      });
+      await setVaultSettings(nextSettings);
+      setColorPicker(null);
     },
     [setVaultSettings, vaultSettings],
   );
@@ -934,6 +1023,23 @@ export function Sidebar(): JSX.Element {
   // separately.
   const trees = useMemo(() => {
     const startedAt = performance.now();
+    const ds = normalizeVaultSettings(vaultSettings);
+    const dateNotePaths = new Set<string>();
+    const dateFolderSubpaths = new Set<string>();
+    if (ds.dailyNotes.enabled || ds.weeklyNotes.enabled) {
+      for (const note of notes) {
+        if (note.folder !== "inbox") continue;
+        const info = classifyDateNote(note, ds);
+        if (!info) continue;
+        dateNotePaths.add(note.path);
+        addSubpathAndAncestors(dateFolderSubpaths, noteFolderSubpath(note, ds));
+      }
+      for (const folder of allFolders) {
+        if (folder.folder !== "inbox") continue;
+        if (!dateNoteFolderMayBelongToDatePattern(folder.subpath, ds)) continue;
+        addSubpathAndAncestors(dateFolderSubpaths, folder.subpath);
+      }
+    }
     const next = {
       quick: buildTree(
         notes.filter((n) => n.folder === "quick"),
@@ -945,7 +1051,7 @@ export function Sidebar(): JSX.Element {
         vaultSettings,
       ),
       inbox: buildTree(
-        notes.filter((n) => n.folder === "inbox"),
+        notes.filter((n) => n.folder === "inbox" && !dateNotePaths.has(n.path)),
         assetFiles.filter(
           (asset) => folderForVaultRelativePath(asset.path, vaultSettings) === "inbox",
         ),
@@ -972,17 +1078,13 @@ export function Sidebar(): JSX.Element {
         vaultSettings,
       ),
     };
-    // Daily/Weekly directories are surfaced in their own pinned, date-grouped
-    // section above NOTES (see DateNotesNav), so drop them from the inbox tree
-    // to avoid showing them twice.
-    const ds = normalizeVaultSettings(vaultSettings);
-    const hideSubpaths = new Set<string>();
-    if (ds.dailyNotes.enabled) hideSubpaths.add(ds.dailyNotes.directory);
-    if (ds.weeklyNotes.enabled) hideSubpaths.add(ds.weeklyNotes.directory);
-    if (hideSubpaths.size) {
+    // Daily/weekly notes are surfaced in their own pinned, date-grouped section
+    // above NOTES. Remove only the empty folder spine left behind by those date
+    // notes so unrelated files under the same year/month folders remain visible.
+    if (dateFolderSubpaths.size) {
       next.inbox = {
         ...next.inbox,
-        children: next.inbox.children.filter((c) => !hideSubpaths.has(c.subpath)),
+        children: pruneEmptyDateNoteFolders(next.inbox.children, dateFolderSubpaths),
       };
     }
     recordRendererPerf("sidebar.tree-build", performance.now() - startedAt, {
@@ -993,6 +1095,41 @@ export function Sidebar(): JSX.Element {
     return next;
   }, [notes, allFolders, assetFiles, vaultSettings]);
 
+  // Resolve favorite keys to live notes/folders. Keys whose target no longer
+  // exists (renamed away, deleted, trashed) are silently skipped — the Favorites
+  // section never shows a broken row. Order follows the stored favorites list.
+  const favoriteItems = useMemo<FavoriteItem[]>(() => {
+    const out: FavoriteItem[] = [];
+    for (const key of vaultSettings.favorites) {
+      if (isFavoriteFolderKey(key)) {
+        const parsed = parseFavoriteFolderKey(key);
+        if (!parsed || !parsed.subpath) continue;
+        const exists = allFolders.some(
+          (f) => f.folder === parsed.folder && f.subpath === parsed.subpath,
+        );
+        if (!exists) continue;
+        out.push({
+          kind: "folder",
+          key,
+          folder: parsed.folder,
+          subpath: parsed.subpath,
+          label: parsed.subpath.split("/").slice(-1)[0],
+        });
+      } else {
+        const note = notes.find((n) => n.path === key);
+        if (!note || note.folder === "trash") continue;
+        out.push({
+          kind: "note",
+          key,
+          path: note.path,
+          title: note.title,
+          isDrawing: isExcalidrawPath(note.path),
+        });
+      }
+    }
+    return out;
+  }, [vaultSettings.favorites, notes, allFolders]);
+
   // Daily/weekly notes grouped for the pinned date-nav: daily by year → month →
   // day, weekly by year → week, all newest-first.
   const dateNav = useMemo(() => {
@@ -1002,16 +1139,17 @@ export function Sidebar(): JSX.Element {
     const daily: { year: number; total: number; months: { month: number; notes: NoteMeta[] }[] }[] =
       [];
     const weekly: { year: number; notes: NoteMeta[] }[] = [];
+    const dailyTimes = new Map<string, number>();
+    const weeklyTimes = new Map<string, number>();
 
     if (s.dailyNotes.enabled) {
       const byYear = new Map<number, Map<number, NoteMeta[]>>();
       for (const n of notes) {
-        if (n.folder !== "inbox") continue;
-        if (noteFolderSubpath(n, vaultSettings) !== dailyDir) continue;
-        const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(n.title);
-        if (!m) continue;
-        const year = Number(m[1]);
-        const month = Number(m[2]) - 1;
+        const info = classifyDateNote(n, s);
+        if (info?.kind !== "daily") continue;
+        dailyTimes.set(n.path, info.date.getTime());
+        const year = info.date.getFullYear();
+        const month = info.date.getMonth();
         let months = byYear.get(year);
         if (!months) byYear.set(year, (months = new Map()));
         (months.get(month) ?? months.set(month, []).get(month)!).push(n);
@@ -1021,7 +1159,11 @@ export function Sidebar(): JSX.Element {
         const mlist = [...months.entries()]
           .sort((a, b) => b[0] - a[0])
           .map(([month, ns]) => {
-            ns.sort((a, b) => b.title.localeCompare(a.title));
+            ns.sort(
+              (a, b) =>
+                (dailyTimes.get(b.path) ?? 0) - (dailyTimes.get(a.path) ?? 0) ||
+                b.title.localeCompare(a.title),
+            );
             total += ns.length;
             return { month, notes: ns };
           });
@@ -1032,14 +1174,18 @@ export function Sidebar(): JSX.Element {
     if (s.weeklyNotes.enabled) {
       const byYear = new Map<number, NoteMeta[]>();
       for (const n of notes) {
-        if (n.folder !== "inbox") continue;
-        if (noteFolderSubpath(n, vaultSettings) !== weeklyDir) continue;
-        if (!/^\d{4}-W\d{2}$/.test(n.title)) continue;
-        const year = Number(n.title.slice(0, 4));
+        const info = classifyDateNote(n, s);
+        if (info?.kind !== "weekly") continue;
+        weeklyTimes.set(n.path, info.date.getTime());
+        const year = getISOWeekYear(info.date);
         (byYear.get(year) ?? byYear.set(year, []).get(year)!).push(n);
       }
       for (const [year, ns] of [...byYear.entries()].sort((a, b) => b[0] - a[0])) {
-        ns.sort((a, b) => b.title.localeCompare(a.title));
+        ns.sort(
+          (a, b) =>
+            (weeklyTimes.get(b.path) ?? 0) - (weeklyTimes.get(a.path) ?? 0) ||
+            b.title.localeCompare(a.title),
+        );
         weekly.push({ year, notes: ns });
       }
     }
@@ -1049,8 +1195,8 @@ export function Sidebar(): JSX.Element {
       weeklyEnabled: s.weeklyNotes.enabled,
       dailyDir,
       weeklyDir,
-      dailyLabel: dailyDir.split("/").pop() || dailyDir,
-      weeklyLabel: weeklyDir.split("/").pop() || weeklyDir,
+      dailyLabel: dateNoteDirectoryDisplayLabel(dailyDir, DEFAULT_DAILY_NOTES_DIRECTORY),
+      weeklyLabel: dateNoteDirectoryDisplayLabel(weeklyDir, DEFAULT_WEEKLY_NOTES_DIRECTORY),
       daily,
       weekly,
       dailyTotal: daily.reduce((sum, y) => sum + y.total, 0),
@@ -1082,11 +1228,9 @@ export function Sidebar(): JSX.Element {
       case "created-asc":
         return (a: NoteMeta, b: NoteMeta) => a.createdAt - b.createdAt;
       case "name-asc":
-        return (a: NoteMeta, b: NoteMeta) =>
-          a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+        return (a: NoteMeta, b: NoteMeta) => naturalCompare(a.title, b.title);
       case "name-desc":
-        return (a: NoteMeta, b: NoteMeta) =>
-          b.title.localeCompare(a.title, undefined, { sensitivity: "base" });
+        return (a: NoteMeta, b: NoteMeta) => naturalCompare(b.title, a.title);
       case "updated-desc":
       default:
         return (a: NoteMeta, b: NoteMeta) => b.updatedAt - a.updatedAt;
@@ -1517,22 +1661,18 @@ export function Sidebar(): JSX.Element {
     const label = isTop ? folderLabels[folder] : subpath.split("/").slice(-1)[0];
     const trashCount = notes.filter((note) => note.folder === "trash").length;
     const iconKey = folderIconKey(folder, subpath);
-    const hasCustomIcon = Object.prototype.hasOwnProperty.call(
-      vaultSettings.folderIcons,
-      iconKey,
-    );
+    // Reset lives inside each picker now (shown when a custom value is set).
     const iconItems: ContextMenuItem[] = [
       {
         label: "Change icon…",
         onSelect: async () => {
-          openFolderIconPicker(folder, subpath, label);
+          openIconPicker(iconKey, label);
         },
       },
       {
-        label: "Reset icon",
-        disabled: !hasCustomIcon,
+        label: "Change color…",
         onSelect: async () => {
-          await resetFolderIcon(folder, subpath);
+          openColorPicker(iconKey, label);
         },
       },
     ];
@@ -1566,7 +1706,13 @@ export function Sidebar(): JSX.Element {
       {
         label: "New note",
         onSelect: async () => {
-          await createAndOpen(folder, subpath);
+          await createAndOpen(folder, subpath, { focusTitle: true });
+        },
+      },
+      {
+        label: "New drawing",
+        onSelect: async () => {
+          await createDrawingAndOpen(folder, subpath);
         },
       },
       {
@@ -1627,6 +1773,14 @@ export function Sidebar(): JSX.Element {
 
     if (!isTop) {
       items.push({ kind: "separator" });
+      const favKey = favoriteFolderKey(folder, subpath);
+      const isFav = vaultSettings.favorites.includes(favKey);
+      items.push({
+        label: isFav ? "Remove from Favorites" : "Add to Favorites",
+        onSelect: async () => {
+          await toggleFavorite(favKey);
+        },
+      });
       items.push({
         label: "Duplicate",
         onSelect: async () => {
@@ -1702,13 +1856,17 @@ export function Sidebar(): JSX.Element {
 
     if (!isTop) {
       items.push({ kind: "separator" });
+      const leafName = subpath.split("/").slice(-1)[0];
+      const isDb = isFormDirName(leafName);
       items.push({
         label: "Rename…",
         onSelect: async () => {
-          const leaf = subpath.split("/").slice(-1)[0];
+          const leaf = leafName;
+          // A database folder renames by its title; the `.base` suffix is part of
+          // the folder name and must be preserved. (#185)
           const next = await promptApp({
-            title: "Rename folder",
-            initialValue: leaf,
+            title: isDb ? "Rename database" : "Rename folder",
+            initialValue: isDb ? formTitleFromDir(leaf) : leaf,
             okLabel: "Rename",
             validate: (v) => {
               if (v.includes("/")) return "Use only a leaf name";
@@ -1717,9 +1875,11 @@ export function Sidebar(): JSX.Element {
           });
           if (!next) return;
           const clean = next.trim().replace(/^\/+|\/+$/g, "");
-          if (!clean || clean === leaf) return;
+          if (!clean) return;
+          const nextLeaf = isDb ? `${clean}${FORM_DIR_SUFFIX}` : clean;
+          if (nextLeaf === leaf) return;
           const parent = subpath.split("/").slice(0, -1).join("/");
-          const nextSubpath = parent ? `${parent}/${clean}` : clean;
+          const nextSubpath = parent ? `${parent}/${nextLeaf}` : nextLeaf;
           try {
             await renameFolderAction(folder, subpath, nextSubpath);
           } catch (err) {
@@ -1728,13 +1888,16 @@ export function Sidebar(): JSX.Element {
         },
       });
       items.push({
-        label: "Delete folder…",
+        label: isDb ? "Delete database…" : "Delete folder…",
         danger: true,
         onSelect: async () => {
+          const label = isDb ? formTitleFromDir(leafName) : subpath;
           const ok = await confirmApp({
-            title: `Delete "${subpath}" and everything inside it?`,
+            title: isDb
+              ? `Delete the "${label}" database and all its records?`
+              : `Delete "${label}" and everything inside it?`,
             description: "This cannot be undone.",
-            confirmLabel: "Delete folder",
+            confirmLabel: isDb ? "Delete database" : "Delete folder",
             danger: true,
           });
           if (!ok) return;
@@ -1754,6 +1917,7 @@ export function Sidebar(): JSX.Element {
     allFolders,
     vault,
     createAndOpen,
+    createDrawingAndOpen,
     createDatabase,
     openTemplatePaletteForFolder,
     openArchiveView,
@@ -1771,8 +1935,9 @@ export function Sidebar(): JSX.Element {
     vaultSettings.folderIcons,
     vaultSettings,
     primaryNotesAtRoot,
-    openFolderIconPicker,
-    resetFolderIcon,
+    openIconPicker,
+    openColorPicker,
+    toggleFavorite,
     bulkSelectionMenuItems,
     selectedSidebarKeys,
   ]);
@@ -1783,7 +1948,13 @@ export function Sidebar(): JSX.Element {
       {
         label: "New note",
         onSelect: async () => {
-          await createAndOpen("inbox", "");
+          await createAndOpen("inbox", "", { focusTitle: true });
+        },
+      },
+      {
+        label: "New drawing",
+        onSelect: async () => {
+          await createDrawingAndOpen("inbox", "");
         },
       },
       {
@@ -1817,7 +1988,7 @@ export function Sidebar(): JSX.Element {
         },
       },
     ],
-    [createAndOpen, createDatabase, openTemplatePaletteForFolder, createFolderAction],
+    [createAndOpen, createDrawingAndOpen, createDatabase, openTemplatePaletteForFolder, createFolderAction],
   );
 
   const noteMenuItems = useMemo<ContextMenuItem[]>(() => {
@@ -1847,6 +2018,13 @@ export function Sidebar(): JSX.Element {
       });
     }
     if (n.folder !== "trash") {
+      const isFav = vaultSettings.favorites.includes(n.path);
+      items.push({
+        label: isFav ? "Remove from Favorites" : "Add to Favorites",
+        onSelect: async () => {
+          await toggleFavorite(n.path);
+        },
+      });
       items.push({
         label: "Rename…",
         onSelect: async () => {
@@ -1878,6 +2056,19 @@ export function Sidebar(): JSX.Element {
           const meta = await window.zen.duplicateNote(n.path);
           await refreshNotes();
           await selectNote(meta.path);
+        },
+      });
+      items.push({ kind: "separator" });
+      items.push({
+        label: "Change icon…",
+        onSelect: async () => {
+          openIconPicker(n.path, n.title);
+        },
+      });
+      items.push({
+        label: "Change color…",
+        onSelect: async () => {
+          openColorPicker(n.path, n.title);
         },
       });
     }
@@ -2007,6 +2198,10 @@ export function Sidebar(): JSX.Element {
     absolutePathLabel,
     tabsEnabled,
     openNoteInTab,
+    toggleFavorite,
+    openIconPicker,
+    openColorPicker,
+    vaultSettings.favorites,
     bulkSelectionMenuItems,
     selectedSidebarKeys,
     folderLabels.archive,
@@ -2510,10 +2705,10 @@ export function Sidebar(): JSX.Element {
             data-sidebar-idx={vaultHeaderIdx}
             data-sidebar-type="vault"
           >
-            <VaultBadge name={vault?.name ?? "Zenvoy"} size={28} />
+            <VaultBadge name={headerVaultName} size={28} />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium text-ink-800">
-                {vault?.name ?? "Zenvoy"}
+                {headerVaultName}
               </div>
               {workspaceMode === "remote" && (
                 <div className="mt-0.5 flex items-center gap-1.5 text-xs text-ink-500">
@@ -2529,10 +2724,10 @@ export function Sidebar(): JSX.Element {
           </button>
         ) : (
           <div className="flex min-w-0 items-center gap-2">
-            <VaultBadge name={vault?.name ?? "Zenvoy"} size={28} />
+            <VaultBadge name={headerVaultName} size={28} />
             <div className="min-w-0">
               <div className="truncate text-sm font-medium text-ink-800">
-                {vault?.name ?? "Zenvoy"}
+                {headerVaultName}
               </div>
               {workspaceMode === "remote" && (
                 <div className="mt-0.5 flex items-center gap-1.5 text-xs text-ink-500">
@@ -2548,8 +2743,11 @@ export function Sidebar(): JSX.Element {
         )}
         <div className="flex items-center gap-0.5">
           <IconBtn
-            title="New note (choose folder)"
-            onClick={() => void createNoteInChosenFolder()}
+            title="Create… (note, drawing, folder, database)"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setRootMenu({ x: r.left, y: r.bottom + 4 });
+            }}
           >
             <PlusIcon />
           </IconBtn>
@@ -2651,6 +2849,29 @@ export function Sidebar(): JSX.Element {
         </div>
       </div>
 
+      {rootContentHiddenByInboxMode && (
+        <div className="mx-3 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+          <p className="text-xs font-semibold text-ink-900">Notes at your vault root aren’t shown</p>
+          <p className="mt-1 text-xs leading-5 text-ink-600">
+            This vault opened in <span className="font-medium text-ink-800">Inbox</span> mode, so
+            top-level files and folders are hidden. Switch to{" "}
+            <span className="font-medium text-ink-800">Vault root</span> to see them — the
+            Obsidian-style flat layout.
+          </p>
+          <div className="mt-2">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() =>
+                void setVaultSettings({ ...vaultSettings, primaryNotesLocation: "root" })
+              }
+            >
+              Switch to Vault root
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Main scrollable tree area */}
       <div
         ref={sidebarScrollRef}
@@ -2676,6 +2897,82 @@ export function Sidebar(): JSX.Element {
             }
           }}
         >
+          {favoriteItems.length > 0 && (
+            <>
+              <SidebarSectionHeading label="Favorites" />
+              {favoriteItems.map((item) => {
+                  const idx = idxCounter.current.value++;
+                  const vimHighlight = vimCursor === idx;
+                  if (item.kind === "note") {
+                    return (
+                      <FavoriteRow
+                        key={item.key}
+                        label={item.title || "Untitled"}
+                        icon={
+                          item.isDrawing ? (
+                            <ExcalidrawIcon width={13} height={13} />
+                          ) : (
+                            <DocumentIcon width={13} height={13} />
+                          )
+                        }
+                        active={selectedPath === item.path}
+                        onClick={() => {
+                          setFocusedPanel("editor");
+                          handleSelectNote(item.path);
+                        }}
+                        onContextMenu={(e) => {
+                          const note = notes.find((n) => n.path === item.path);
+                          if (note) openNoteMenu(e, note);
+                        }}
+                        sidebarIdx={idx}
+                        vimHighlight={vimHighlight}
+                        sidebarFocused={isSidebarFocused}
+                        dataAttrs={{
+                          "data-sidebar-type": "note",
+                          "data-sidebar-path": item.path,
+                        }}
+                      />
+                    );
+                  }
+                  return (
+                    <FavoriteRow
+                      key={item.key}
+                      label={item.label}
+                      icon={
+                        resolveFolderIconOption(
+                          item.folder,
+                          item.subpath,
+                          vaultSettings.folderIcons,
+                        ).icon
+                      }
+                      active={isFolderActive(item.folder, item.subpath)}
+                      onClick={() => {
+                        setFocusedPanel("editor");
+                        setView({
+                          kind: "folder",
+                          folder: item.folder,
+                          subpath: item.subpath,
+                        });
+                      }}
+                      onContextMenu={(e) =>
+                        openFolderMenu(e, item.folder, item.subpath)
+                      }
+                      sidebarIdx={idx}
+                      vimHighlight={vimHighlight}
+                      sidebarFocused={isSidebarFocused}
+                      dataAttrs={{
+                        "data-sidebar-type": "folder",
+                        "data-sidebar-folder": item.folder,
+                        "data-sidebar-subpath": item.subpath,
+                      }}
+                    />
+                  );
+                })}
+            </>
+          )}
+
+          <SidebarSectionHeading label="Quick access" />
+
           <TaskSidebarRow
             active={tasksViewActive}
             onClick={() => void openTasksView()}
@@ -2751,41 +3048,9 @@ export function Sidebar(): JSX.Element {
             onNoteContextMenu={openNoteMenu}
             dragPayloadForItem={dragPayloadForItem}
             onRootContextMenu={(e, subpath) => openFolderMenu(e, "inbox", subpath)}
+            idxCounter={idxCounter.current}
+            vimCursor={vimCursor}
           />
-
-          <div className="mt-1">
-            <ArchiveSidebarRow
-              label={folderLabels.archive}
-              icon={resolveFolderIconOption("archive", "", vaultSettings.folderIcons).icon}
-              count={countNotesInTree(trees.archive)}
-              active={
-                archiveViewActive ||
-                (view.kind === "folder" && view.folder === "archive") ||
-                !!selectedPath?.startsWith("archive/")
-              }
-              onClick={() => {
-                void openArchiveView();
-              }}
-              onContextMenu={(e) => openFolderMenu(e, "archive", "")}
-              sidebarIdx={idxCounter.current.value++}
-              vimHighlight={vimCursor === idxCounter.current.value - 1}
-              sidebarFocused={isSidebarFocused}
-            />
-
-            <TrashSidebarRow
-              label={folderLabels.trash}
-              icon={resolveFolderIconOption("trash", "", vaultSettings.folderIcons).icon}
-              count={countNotesInTree(trees.trash)}
-              active={trashViewActive || !!selectedPath?.startsWith("trash/")}
-              onClick={() => {
-                void openTrashView();
-              }}
-              onContextMenu={(e) => openFolderMenu(e, "trash", "")}
-              sidebarIdx={idxCounter.current.value++}
-              vimHighlight={vimCursor === idxCounter.current.value - 1}
-              sidebarFocused={isSidebarFocused}
-            />
-          </div>
 
           <SidebarSectionHeading
             label="Notes"
@@ -2863,10 +3128,9 @@ export function Sidebar(): JSX.Element {
             />
           )}
 
-          {/* Tag pills — pushed to the bottom of the tree area, just above
-              the footer, via mt-auto (the wrapper is min-h-full flex-col). */}
+          {/* Tags flow with the content, right after the notes tree. */}
           {tags.length > 0 && (
-            <div className="mt-auto pt-5">
+            <div className="pt-4">
               <button
                 type="button"
                 onClick={() => setTagsCollapsed(!tagsCollapsed)}
@@ -2874,19 +3138,6 @@ export function Sidebar(): JSX.Element {
                 aria-expanded={!tagsCollapsed}
                 className="flex w-full items-center gap-1 rounded px-2 pb-2 text-xs font-medium uppercase tracking-wide text-ink-500 transition-colors hover:text-ink-800"
               >
-                {showSidebarChevrons && (
-                  <span
-                    aria-hidden
-                    className="inline-block transition-transform"
-                    style={{
-                      transform: tagsCollapsed
-                        ? "rotate(-90deg)"
-                        : "rotate(0deg)",
-                    }}
-                  >
-                    ▾
-                  </span>
-                )}
                 <span>Tags</span>
                 <span className="ml-1 text-ink-500 normal-case tracking-normal">
                   {tags.length}
@@ -2916,10 +3167,10 @@ export function Sidebar(): JSX.Element {
                           "rounded-full px-2.5 py-1 text-xs transition-colors",
                           active
                             ? isVimHighlight
-                              ? "vim-cursor-on-active bg-accent text-white"
+                              ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
                               : isSidebarFocused
                                 ? "text-accent"
-                                : "bg-accent text-white"
+                                : "bg-paper-300/70 text-ink-900 font-medium"
                             : isVimHighlight
                               ? "vim-cursor"
                               : "bg-paper-200 text-ink-800 hover:bg-paper-300",
@@ -2933,7 +3184,7 @@ export function Sidebar(): JSX.Element {
                           className={[
                             "ml-1 text-2xs",
                             active && !isSidebarFocused
-                              ? "text-white/80"
+                              ? "text-ink-700"
                               : "text-ink-500",
                           ].join(" ")}
                         >
@@ -2945,7 +3196,51 @@ export function Sidebar(): JSX.Element {
                 </div>
               )}
             </div>
-          )}
+            )}
+
+          {/* System (Archive / Trash / Assets) pinned to the bottom. */}
+          <div className="mt-auto pt-4">
+            <SidebarSectionHeading label="System" />
+              <SystemRow
+                icon={resolveFolderIconOption("archive", "", vaultSettings.folderIcons).icon}
+                label={folderLabels.archive}
+                count={countNotesInTree(trees.archive)}
+                active={
+                  archiveViewActive ||
+                  (view.kind === "folder" && view.folder === "archive") ||
+                  !!selectedPath?.startsWith("archive/")
+                }
+                onClick={() => void openArchiveView()}
+                onContextMenu={(e) => openFolderMenu(e, "archive", "")}
+                sidebarIdx={idxCounter.current.value++}
+                vimHighlight={vimCursor === idxCounter.current.value - 1}
+                sidebarFocused={isSidebarFocused}
+                sidebarType="archive"
+              />
+              <SystemRow
+                icon={resolveFolderIconOption("trash", "", vaultSettings.folderIcons).icon}
+                label={folderLabels.trash}
+                count={countNotesInTree(trees.trash)}
+                active={trashViewActive || !!selectedPath?.startsWith("trash/")}
+                onClick={() => void openTrashView()}
+                onContextMenu={(e) => openFolderMenu(e, "trash", "")}
+                sidebarIdx={idxCounter.current.value++}
+                vimHighlight={vimCursor === idxCounter.current.value - 1}
+                sidebarFocused={isSidebarFocused}
+                sidebarType="trash"
+              />
+              <SystemRow
+                icon={<PaperclipIcon width={16} height={16} />}
+                label="Assets"
+                count={assetCount}
+                active={assetsViewActive}
+                onClick={() => void openAssetsView()}
+                sidebarIdx={idxCounter.current.value++}
+                vimHighlight={vimCursor === idxCounter.current.value - 1}
+                sidebarFocused={isSidebarFocused}
+                sidebarType="assets"
+              />
+            </div>
         </div>
       </div>
 
@@ -2966,7 +3261,7 @@ export function Sidebar(): JSX.Element {
             sidebarIdx={idxCounter.current.value++}
             vimHighlight={vimCursor === idxCounter.current.value - 1}
             sidebarFocused={isSidebarFocused}
-            sidebarData={{ type: "assets" }}
+            sidebarData={{ type: "files" }}
           />
         )}
         {(!hasAssetsDir || !canRevealInFileManager) && <div />}
@@ -3041,22 +3336,22 @@ export function Sidebar(): JSX.Element {
           onClose={() => setAssetMenu(null)}
         />
       )}
-      {folderIconPicker && (
+      {iconPicker && (
         <FolderIconPickerModal
-          targetLabel={folderIconPicker.label}
-          currentIconId={resolveFolderIconId(
-            folderIconPicker.folder,
-            folderIconPicker.subpath,
-            vaultSettings.folderIcons,
-          )}
-          onSelect={(iconId) =>
-            void saveFolderIcon(
-              folderIconPicker.folder,
-              folderIconPicker.subpath,
-              iconId,
-            )
-          }
-          onCancel={() => setFolderIconPicker(null)}
+          targetLabel={iconPicker.label}
+          currentIconId={vaultSettings.folderIcons[iconPicker.key] ?? null}
+          onSelect={(iconId) => void saveIcon(iconPicker.key, iconId)}
+          onReset={() => void resetIcon(iconPicker.key)}
+          onCancel={() => setIconPicker(null)}
+        />
+      )}
+      {colorPicker && (
+        <FolderColorPickerModal
+          targetLabel={colorPicker.label}
+          currentColorId={vaultSettings.folderColors[colorPicker.key] ?? null}
+          onSelect={(colorId) => void saveColor(colorPicker.key, colorId)}
+          onReset={() => void resetColor(colorPicker.key)}
+          onCancel={() => setColorPicker(null)}
         />
       )}
       {sortMenu && (
@@ -3287,19 +3582,52 @@ function buildTree(
   return root;
 }
 
+function addSubpathAndAncestors(target: Set<string>, subpath: string): void {
+  const parts = subpath.split("/").filter(Boolean);
+  let acc = "";
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    target.add(acc);
+  }
+}
+
+function pruneEmptyDateNoteFolders(
+  children: TreeNode[],
+  dateFolderSubpaths: Set<string>,
+): TreeNode[] {
+  return children
+    .map((child) => ({
+      ...child,
+      children: pruneEmptyDateNoteFolders(child.children, dateFolderSubpaths),
+    }))
+    .filter((child) => {
+      if (!dateFolderSubpaths.has(child.subpath)) return true;
+      return child.notes.length > 0 || child.assets.length > 0 || child.children.length > 0;
+    });
+}
+
+// Folders sort by name, numeric-aware so "2 Foo" comes before "10 Foo" — the
+// way users order them with leading numbers/letters. Applied at render time so
+// new folders land in place immediately, regardless of on-disk read order. (#168)
+function compareFolderNodes(a: TreeNode, b: TreeNode): number {
+  return naturalCompare(a.name, b.name);
+}
+
 function getTreeRenderEntries(
   node: TreeNode,
   showNotes: boolean,
   sortComparator: ((a: NoteMeta, b: NoteMeta) => number) | null,
   groupByKind: boolean,
 ): TreeRenderEntry[] {
+  const sortedChildren = node.children.slice().sort(compareFolderNodes);
+
   if (!showNotes) {
-    return node.children.map((child) => ({ type: "folder", node: child }));
+    return sortedChildren.map((child) => ({ type: "folder", node: child }));
   }
 
   if (sortComparator || groupByKind) {
     return [
-      ...node.children.map(
+      ...sortedChildren.map(
         (child) => ({ type: "folder", node: child }) as const,
       ),
       ...node.notes
@@ -3712,6 +4040,13 @@ function SubTree({
     node.subpath,
     vaultSettings.folderIcons,
   );
+  const folderColorClass =
+    resolveFolderColorGlyphClass(folder, node.subpath, vaultSettings.folderColors) ??
+    undefined;
+  // A `<Name>.base` folder is a database: render it with a database icon and a
+  // title without the suffix; clicking the row opens the grid, while the
+  // chevron still expands to reveal its record-page notes. (#185)
+  const isDatabase = isFormDirName(node.name);
   const entries = useMemo(
     () => getTreeRenderEntries(node, showNotes, sortComparator, groupByKind),
     [node, showNotes, sortComparator, groupByKind],
@@ -3747,6 +4082,15 @@ function SubTree({
   const handleSelect = (
     e: React.MouseEvent | React.KeyboardEvent,
   ): void => {
+    if (isDatabase) {
+      const csvPath = csvPathForFormDir(
+        vaultRelativeFolderPath(folder, node.subpath, vaultSettings),
+      );
+      onSelectItem(e, { kind: "folder", folder, subpath: node.subpath }, () => {
+        void useStore.getState().openDatabase(csvPath);
+      });
+      return;
+    }
     onSelectItem(e, { kind: "folder", folder, subpath: node.subpath }, () => {
       setView({ kind: "folder", folder, subpath: node.subpath });
       if (hasChildren) {
@@ -3759,8 +4103,19 @@ function SubTree({
   return (
     <div className="flex flex-col">
       <TreeRow
-        icon={iconOption.id === "folder" ? <FolderGlyphIcon open={!isCollapsed && hasChildren} /> : iconOption.icon}
-        label={node.name}
+        icon={
+          // A database shows its DB glyph unless a custom icon was chosen for it
+          // (iconOption.id !== "folder" means the user picked one).
+          isDatabase && iconOption.id === "folder" ? (
+            <DatabaseIcon />
+          ) : iconOption.id === "folder" ? (
+            <FolderGlyphIcon open={!isCollapsed && hasChildren} />
+          ) : (
+            iconOption.icon
+          )
+        }
+        glyphColorClass={folderColorClass}
+        label={isDatabase ? formTitleFromDir(node.name) : node.name}
         isSymlink={node.isSymlink}
         count={countNotesInTree(node)}
         active={isFolderActive(folder, node.subpath)}
@@ -3914,7 +4269,6 @@ interface NoteLeafProps {
 const NoteLeaf = memo(function NoteLeaf({
   note,
   depth,
-  showSidebarChevrons,
   active,
   selected,
   sidebarFocused,
@@ -3952,6 +4306,12 @@ const NoteLeaf = memo(function NoteLeaf({
     },
     [dragPayloadForItem, note.path],
   );
+  // Custom icon / color set via the note's right-click menu (keyed by path).
+  // Read directly from the store so the row updates when they change — the
+  // selector returns a primitive, so it only re-renders for this note.
+  const customIconId = useStore((s) => s.vaultSettings.folderIcons[note.path]);
+  const customColorId = useStore((s) => s.vaultSettings.folderColors[note.path]);
+  const colorClass = colorGlyphClassById(customColorId);
 
   return (
     <button
@@ -3961,13 +4321,15 @@ const NoteLeaf = memo(function NoteLeaf({
       draggable
       onDragStart={handleDragStart}
       className={[
-        "group flex h-8 w-full items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
+        "group flex h-9 w-full items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
         active
-          ? vimHighlight
-            ? "vim-cursor-on-active bg-accent text-white"
-            : sidebarFocused
-              ? "text-accent"
-              : "bg-accent text-white"
+          ? colorClass
+            ? `bg-accent/20 ring-1 ring-inset ring-accent/60${vimHighlight ? " vim-cursor-on-active" : ""}`
+            : vimHighlight
+              ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
+              : sidebarFocused
+                ? "text-accent"
+                : "bg-paper-300/70 text-ink-900 font-medium"
           : selected
             ? "bg-accent/[0.09] text-ink-900"
             : vimHighlight
@@ -3984,23 +4346,34 @@ const NoteLeaf = memo(function NoteLeaf({
           }
         : {})}
     >
-      {showSidebarChevrons && <span className="h-5 w-5 shrink-0" />}
-      <SidebarGlyph active={strongActive} rowActive={active || selected}>
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.75"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9Z" />
-          <path d="M14 3v6h6" />
-        </svg>
+      <SidebarGlyph
+        active={strongActive}
+        rowActive={active || selected}
+        colorClass={colorClass ?? undefined}
+      >
+        {customIconId ? (
+          iconOptionById(customIconId).icon
+        ) : isExcalidrawPath(note.path) ? (
+          <ExcalidrawIcon width={14} height={14} />
+        ) : (
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9Z" />
+            <path d="M14 3v6h6" />
+          </svg>
+        )}
       </SidebarGlyph>
-      <span className="flex-1 truncate">{note.title}</span>
+      <span className={["flex-1 truncate", colorClass].filter(Boolean).join(" ")}>
+        {note.title}
+      </span>
       {note.isSymlink && (
         <span
           aria-label="Symlinked note"
@@ -4010,7 +4383,7 @@ const NoteLeaf = memo(function NoteLeaf({
             active
               ? sidebarFocused && !vimHighlight
                 ? "text-accent/70"
-                : "text-white/70"
+                : "text-ink-600"
               : selected
                 ? "text-accent/75"
                 : "text-ink-500",
@@ -4040,7 +4413,7 @@ const NoteLeaf = memo(function NoteLeaf({
             active
               ? sidebarFocused && !vimHighlight
                 ? "text-accent/70"
-                : "text-white/70"
+                : "text-ink-600"
               : selected
                 ? "text-accent/75"
               : "text-ink-500",
@@ -4091,7 +4464,6 @@ function AssetLeaf({
   asset,
   vaultRoot,
   depth,
-  showSidebarChevrons,
   onOpen,
   onContextMenu,
   sidebarFocused,
@@ -4127,7 +4499,7 @@ function AssetLeaf({
       draggable
       onDragStart={handleDragStart}
       className={[
-        "group flex h-8 w-full items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
+        "group flex h-9 w-full items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
         vimHighlight ? "vim-cursor" : "text-ink-700 hover:bg-paper-200/70",
       ].join(" ")}
       style={{ paddingLeft: 4 + depth * 14 }}
@@ -4139,7 +4511,6 @@ function AssetLeaf({
           }
         : {})}
     >
-      {showSidebarChevrons && <span className="h-5 w-5 shrink-0" />}
       <SidebarGlyph active={false} rowActive={false}>
         <svg
           width="14"
@@ -4197,8 +4568,8 @@ function TreeRow({
   selectionKey,
   trailing,
   isSymlink = false,
-  reserveLeadingSlot = true,
   showExpandChevron = true,
+  glyphColorClass,
 }: {
   icon: JSX.Element;
   label: string;
@@ -4226,10 +4597,13 @@ function TreeRow({
   trailing?: JSX.Element;
   /** Show a symlink indicator when this row's directory entry is a link. */
   isSymlink?: boolean;
-  /** Keep a blank chevron column for non-expandable rows when alignment matters. */
+  /** Obsolete (no leading chevron gutter anymore); accepted for compatibility. */
   reserveLeadingSlot?: boolean;
-  /** Hide the chevron affordance while keeping row-click toggle behavior. */
+  /** Reveal the hover disclosure chevron on the folder icon. When false the
+   *  folder shows only its icon and toggles via row-click. */
   showExpandChevron?: boolean;
+  /** Custom resting tint for the leading glyph (folder color). */
+  glyphColorClass?: string;
 }): JSX.Element {
   const strongActive = active && (!sidebarFocused || !!vimHighlight);
 
@@ -4251,13 +4625,18 @@ function TreeRow({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={[
-        "group flex h-8 w-full items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
+        "group flex h-9 w-full items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
         active
-          ? vimHighlight
-            ? "vim-cursor-on-active bg-accent text-white"
-            : sidebarFocused
-              ? "text-accent"
-              : "bg-accent text-white"
+          ? glyphColorClass
+            ? // Colored folder: a saturated accent fill would put same-hue text on
+              // top (orange-on-orange). Use a faint tint + ring so the folder color
+              // stays readable while still reading as the active row.
+              `bg-accent/20 ring-1 ring-inset ring-accent/60${vimHighlight ? " vim-cursor-on-active" : ""}`
+            : vimHighlight
+              ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
+              : sidebarFocused
+                ? "text-accent"
+                : "bg-paper-300/70 text-ink-900 font-medium"
           : dropTarget
             ? "bg-accent/20 text-ink-900 ring-1 ring-accent/60"
             : selected
@@ -4281,48 +4660,68 @@ function TreeRow({
       style={{ paddingLeft: 4 + depth * 14 }}
     >
       {expandable && showExpandChevron ? (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle();
-          }}
+        // Notion-style disclosure: the folder icon turns into a chevron while the
+        // row is hovered — click it to expand/collapse. No separate chevron gutter.
+        <span
+          className="relative flex h-5 w-5 shrink-0 items-center justify-center"
           data-vim-hint-ignore
-          className={[
-            "flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors",
-            strongActive
-              ? "text-white/80 hover:bg-white/15"
-              : "text-ink-500 hover:bg-paper-300/60",
-          ].join(" ")}
-          aria-label={collapsed ? "Expand" : "Collapse"}
         >
-          <svg
-            width="10"
-            height="10"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={`transition-transform ${collapsed ? "" : "rotate-90"}`}
+          <span className="flex h-5 w-5 items-center justify-center group-hover:hidden">
+            <SidebarGlyph
+              active={strongActive}
+              rowActive={active || selected}
+              colorClass={glyphColorClass}
+            >
+              {icon}
+            </SidebarGlyph>
+          </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            aria-label={collapsed ? "Expand" : "Collapse"}
+            className={[
+              "absolute inset-0 hidden items-center justify-center rounded transition-colors group-hover:flex",
+              strongActive ? "text-ink-900" : "text-ink-500 hover:text-ink-900",
+            ].join(" ")}
           >
-            <path d="m9 6 6 6-6 6" />
-          </svg>
-        </button>
-      ) : reserveLeadingSlot ? (
-        <span className="h-5 w-5 shrink-0" />
-      ) : null}
-      <SidebarGlyph active={strongActive} rowActive={active || selected}>
-        {icon}
-      </SidebarGlyph>
-      <span className="flex-1 truncate">{label}</span>
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={`transition-transform ${collapsed ? "" : "rotate-90"}`}
+            >
+              <path d="m9 6 6 6-6 6" />
+            </svg>
+          </button>
+        </span>
+      ) : (
+        <SidebarGlyph
+          active={strongActive}
+          rowActive={active || selected}
+          colorClass={glyphColorClass}
+        >
+          {icon}
+        </SidebarGlyph>
+      )}
+      <span
+        className={["flex-1 truncate", glyphColorClass].filter(Boolean).join(" ")}
+      >
+        {label}
+      </span>
       {isSymlink && (
         <span
           aria-label="Symlinked folder"
           title="Symlinked into this vault"
           className={[
             "shrink-0",
-            strongActive ? "text-white/70" : selected ? "text-accent/75" : "text-ink-500",
+            strongActive ? "text-ink-600" : selected ? "text-accent/75" : "text-ink-500",
           ].join(" ")}
         >
           <svg
@@ -4352,7 +4751,7 @@ function TreeRow({
         <span
           className={[
             "shrink-0 pr-2 text-xs",
-            strongActive ? "text-white/80" : selected ? "text-accent/75" : "text-ink-500",
+            strongActive ? "text-ink-700" : selected ? "text-accent/75" : "text-ink-500",
           ].join(" ")}
         >
           {count}
@@ -4390,13 +4789,13 @@ function TaskSidebarRow({
         }
       }}
       className={[
-        "group flex h-8 items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
+        "group flex h-9 items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
         active
           ? vimHighlight
-            ? "vim-cursor-on-active bg-accent text-white"
+            ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
             : sidebarFocused
               ? "text-accent"
-              : "bg-accent text-white"
+              : "bg-paper-300/70 text-ink-900 font-medium"
           : vimHighlight
             ? "vim-cursor"
             : "text-ink-800 hover:bg-paper-200/70",
@@ -4417,29 +4816,31 @@ function TaskSidebarRow({
   );
 }
 
-function ArchiveSidebarRow({
+// A single favorited note/folder row. Sets the same data-sidebar-* attributes
+// as a regular note/folder row so the shared Vim activation (Enter) and the
+// `m` context-menu key work without special-casing.
+function FavoriteRow({
   label,
   icon,
-  count,
   active,
   onClick,
   onContextMenu,
   sidebarIdx,
   vimHighlight,
   sidebarFocused = false,
+  dataAttrs,
 }: {
   label: string;
   icon: JSX.Element;
-  count: number;
   active: boolean;
   onClick: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   sidebarIdx?: number;
   vimHighlight?: boolean;
   sidebarFocused?: boolean;
+  dataAttrs: Record<string, string | number>;
 }): JSX.Element {
   const strongActive = active && (!sidebarFocused || !!vimHighlight);
-
   return (
     <div
       role="button"
@@ -4453,49 +4854,36 @@ function ArchiveSidebarRow({
       }}
       onContextMenu={onContextMenu}
       className={[
-        "group select-none flex h-8 items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
+        "group select-none flex h-9 items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
         active
           ? vimHighlight
-            ? "vim-cursor-on-active bg-accent text-white"
+            ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
             : sidebarFocused
               ? "text-accent"
-              : "bg-accent text-white"
+              : "bg-paper-300/70 text-ink-900 font-medium"
           : vimHighlight
             ? "vim-cursor"
             : "text-ink-800 hover:bg-paper-200/70",
       ].join(" ")}
       style={{ paddingLeft: 4 }}
-      {...(sidebarIdx != null
-        ? {
-            "data-sidebar-idx": sidebarIdx,
-            "data-sidebar-type": "archive",
-          }
-        : {
-            "data-sidebar-type": "archive",
-          })}
+      {...(sidebarIdx != null ? { "data-sidebar-idx": sidebarIdx } : {})}
+      {...dataAttrs}
     >
       <SidebarGlyph active={strongActive} rowActive={active}>
         {icon}
       </SidebarGlyph>
       <span className="flex-1 truncate">{label}</span>
       {sidebarFocused && vimHighlight && (
-        <RowKeyHint active={active} keyLabel="m" compact={count > 0} />
-      )}
-      {count > 0 && (
-        <span
-          className={[
-            "shrink-0 pr-2 text-xs",
-            strongActive ? "text-white/80" : "text-ink-500",
-          ].join(" ")}
-        >
-          {count}
-        </span>
+        <RowKeyHint active={active} keyLabel="m" compact />
       )}
     </div>
   );
 }
 
-function TrashSidebarRow({
+// A System row (Archive / Trash / Assets): a full-width vertical row with a
+// leading glyph, label, and trailing count. Vim-navigable and activatable via
+// its data-sidebar-type.
+function SystemRow({
   label,
   icon,
   count,
@@ -4505,6 +4893,7 @@ function TrashSidebarRow({
   sidebarIdx,
   vimHighlight,
   sidebarFocused = false,
+  sidebarType,
 }: {
   label: string;
   icon: JSX.Element;
@@ -4515,6 +4904,7 @@ function TrashSidebarRow({
   sidebarIdx?: number;
   vimHighlight?: boolean;
   sidebarFocused?: boolean;
+  sidebarType: string;
 }): JSX.Element {
   const strongActive = active && (!sidebarFocused || !!vimHighlight);
 
@@ -4531,26 +4921,21 @@ function TrashSidebarRow({
       }}
       onContextMenu={onContextMenu}
       className={[
-        "group select-none flex h-8 items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
+        "group select-none flex h-9 items-center gap-1.5 rounded-lg px-1 text-left text-sm outline-none transition-colors focus:outline-none",
         active
           ? vimHighlight
-            ? "vim-cursor-on-active bg-accent text-white"
+            ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
             : sidebarFocused
               ? "text-accent"
-              : "bg-accent text-white"
+              : "bg-paper-300/70 text-ink-900 font-medium"
           : vimHighlight
             ? "vim-cursor"
             : "text-ink-800 hover:bg-paper-200/70",
       ].join(" ")}
       style={{ paddingLeft: 4 }}
       {...(sidebarIdx != null
-        ? {
-            "data-sidebar-idx": sidebarIdx,
-            "data-sidebar-type": "trash",
-          }
-        : {
-            "data-sidebar-type": "trash",
-          })}
+        ? { "data-sidebar-idx": sidebarIdx, "data-sidebar-type": sidebarType }
+        : { "data-sidebar-type": sidebarType })}
     >
       <SidebarGlyph active={strongActive} rowActive={active}>
         {icon}
@@ -4563,7 +4948,7 @@ function TrashSidebarRow({
         <span
           className={[
             "shrink-0 pr-2 text-xs",
-            strongActive ? "text-white/80" : "text-ink-500",
+            strongActive ? "text-ink-700" : "text-ink-500",
           ].join(" ")}
         >
           {count}
@@ -4602,13 +4987,13 @@ function SidebarRow({
     <button
       onClick={onClick}
       className={[
-        "group flex h-8 items-center gap-2 rounded-lg px-2 text-sm outline-none transition-colors focus:outline-none",
+        "group flex h-9 items-center gap-2 rounded-lg px-2 text-sm outline-none transition-colors focus:outline-none",
         active
           ? vimHighlight
-            ? "vim-cursor-on-active bg-accent text-white"
+            ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
             : sidebarFocused
               ? "text-accent"
-              : "bg-accent text-white"
+              : "bg-paper-300/70 text-ink-900 font-medium"
           : vimHighlight
             ? "vim-cursor"
             : "text-ink-800 hover:bg-paper-200/70",
@@ -4622,7 +5007,7 @@ function SidebarRow({
     >
       <span
         className={
-          strongActive ? "text-white" : "text-ink-500 group-hover:text-ink-800"
+          strongActive ? "text-ink-900" : "text-ink-500 group-hover:text-ink-800"
         }
       >
         {icon}
@@ -4639,7 +5024,7 @@ function SidebarRow({
         <span
           className={[
             "text-xs",
-            strongActive ? "text-white/80" : "text-ink-500",
+            strongActive ? "text-ink-700" : "text-ink-500",
           ].join(" ")}
         >
           {count}
@@ -4690,10 +5075,10 @@ function SidebarFooterAction({
         "inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium leading-none transition-colors whitespace-nowrap",
         active
           ? vimHighlight
-            ? "vim-cursor-on-active bg-accent text-white"
+            ? "vim-cursor-on-active bg-paper-300/70 text-ink-900 font-medium"
             : sidebarFocused
               ? "text-accent"
-              : "bg-accent text-white"
+              : "bg-paper-300/70 text-ink-900 font-medium"
           : vimHighlight
             ? "vim-cursor"
             : "text-ink-500 hover:bg-paper-200/70 hover:text-ink-900",
@@ -4706,7 +5091,7 @@ function SidebarFooterAction({
         : {})}
     >
       <span
-        className={["shrink-0", strongActive ? "text-white" : ""].join(" ")}
+        className={["shrink-0", strongActive ? "text-ink-900" : ""].join(" ")}
       >
         {icon}
       </span>
@@ -4716,7 +5101,7 @@ function SidebarFooterAction({
           className={[
             "rounded-full px-1.5 py-0.5 text-2xs",
             strongActive
-              ? "bg-white/12 text-white/80"
+              ? "bg-ink-900/10 text-ink-700"
               : "bg-paper-200/80 text-ink-500",
           ].join(" ")}
         >
@@ -4728,7 +5113,7 @@ function SidebarFooterAction({
           className={[
             "rounded-full px-1.5 py-0.5 text-2xs font-semibold",
             strongActive
-              ? "bg-white/16 text-white"
+              ? "bg-accent/20 text-accent"
               : "bg-accent/12 text-accent",
           ].join(" ")}
         >
@@ -4754,7 +5139,6 @@ function IconBtn({
     <button
       type="button"
       onClick={onClick}
-      title={title}
       aria-label={title}
       className={[
         "group relative flex h-7 w-7 items-center justify-center rounded-md transition-colors",
@@ -4806,6 +5190,8 @@ function DateNotesNav({
   onNoteContextMenu,
   dragPayloadForItem,
   onRootContextMenu,
+  idxCounter,
+  vimCursor,
 }: {
   dateNav: DateNavData;
   expanded: Set<string>;
@@ -4826,6 +5212,8 @@ function DateNotesNav({
   onNoteContextMenu: (e: React.MouseEvent, note: NoteMeta) => void;
   dragPayloadForItem: (item: SidebarSelectionItem) => DragPayload;
   onRootContextMenu?: (e: React.MouseEvent, subpath: string) => void;
+  idxCounter: { value: number };
+  vimCursor: number;
 }): JSX.Element | null {
   const rows: JSX.Element[] = [];
   const monthName = (year: number, month: number): string =>
@@ -4839,39 +5227,58 @@ function DateNotesNav({
     icon: JSX.Element,
     active: boolean,
     chevron: boolean,
+    // The date directory this group belongs to, so Vim Enter navigates there.
+    sidebarSubpath: string,
     onContextMenu?: (e: React.MouseEvent) => void,
-  ): JSX.Element => (
-    <TreeRow
-      key={key}
-      icon={icon}
-      label={label}
-      count={count}
-      active={active}
-      expandable
-      collapsed={!expanded.has(key)}
-      depth={depth}
-      onToggle={() => onToggle(key)}
-      onSelect={onSelect}
-      onContextMenu={onContextMenu}
-      reserveLeadingSlot={chevron}
-      showExpandChevron={chevron}
-    />
-  );
-  const leaf = (note: NoteMeta, depth: number): JSX.Element => (
-    <NoteLeaf
-      key={note.path}
-      note={note}
-      depth={depth}
-      showSidebarChevrons={showSidebarChevrons}
-      active={note.path === selectedPath}
-      selected={selectedKeys.has(noteSelectionKey(note.path))}
-      sidebarFocused={sidebarFocused}
-      onSelectItem={onSelectItem}
-      onSelectNote={onSelectNote}
-      onContextMenuNote={onNoteContextMenu}
-      dragPayloadForItem={dragPayloadForItem}
-    />
-  );
+  ): JSX.Element => {
+    const idx = idxCounter.value++;
+    return (
+      <TreeRow
+        key={key}
+        icon={icon}
+        label={label}
+        count={count}
+        active={active}
+        expandable
+        collapsed={!expanded.has(key)}
+        depth={depth}
+        onToggle={() => onToggle(key)}
+        onSelect={onSelect}
+        onContextMenu={onContextMenu}
+        reserveLeadingSlot={chevron}
+        showExpandChevron={chevron}
+        sidebarIdx={idx}
+        vimHighlight={vimCursor === idx}
+        sidebarFocused={sidebarFocused}
+        sidebarData={{
+          type: "folder",
+          folder: "inbox",
+          subpath: sidebarSubpath,
+          key: "",
+        }}
+      />
+    );
+  };
+  const leaf = (note: NoteMeta, depth: number): JSX.Element => {
+    const idx = idxCounter.value++;
+    return (
+      <NoteLeaf
+        key={note.path}
+        note={note}
+        depth={depth}
+        showSidebarChevrons={showSidebarChevrons}
+        active={note.path === selectedPath}
+        selected={selectedKeys.has(noteSelectionKey(note.path))}
+        sidebarFocused={sidebarFocused}
+        onSelectItem={onSelectItem}
+        onSelectNote={onSelectNote}
+        onContextMenuNote={onNoteContextMenu}
+        dragPayloadForItem={dragPayloadForItem}
+        sidebarIdx={idx}
+        vimHighlight={vimCursor === idx}
+      />
+    );
+  };
 
   if (dateNav.dailyEnabled && dateNav.dailyTotal > 0) {
     rows.push(
@@ -4884,6 +5291,7 @@ function DateNotesNav({
         dailyIcon,
         isFolderActive("inbox", dateNav.dailyDir),
         false,
+        dateNav.dailyDir,
         onRootContextMenu ? (e) => onRootContextMenu(e, dateNav.dailyDir) : undefined,
       ),
     );
@@ -4900,6 +5308,7 @@ function DateNotesNav({
             <FolderGlyphIcon open={expanded.has(yKey)} />,
             false,
             showSidebarChevrons,
+            dateNav.dailyDir,
           ),
         );
         if (expanded.has(yKey)) {
@@ -4915,6 +5324,7 @@ function DateNotesNav({
                 <FolderGlyphIcon open={expanded.has(mKey)} />,
                 false,
                 showSidebarChevrons,
+                dateNav.dailyDir,
               ),
             );
             if (expanded.has(mKey)) for (const n of mg.notes) rows.push(leaf(n, 3));
@@ -4935,6 +5345,7 @@ function DateNotesNav({
         weeklyIcon,
         isFolderActive("inbox", dateNav.weeklyDir),
         false,
+        dateNav.weeklyDir,
         onRootContextMenu ? (e) => onRootContextMenu(e, dateNav.weeklyDir) : undefined,
       ),
     );
@@ -4951,6 +5362,7 @@ function DateNotesNav({
             <FolderGlyphIcon open={expanded.has(yKey)} />,
             false,
             showSidebarChevrons,
+            dateNav.weeklyDir,
           ),
         );
         if (expanded.has(yKey)) for (const n of yg.notes) rows.push(leaf(n, 2));
@@ -4959,7 +5371,7 @@ function DateNotesNav({
   }
 
   if (rows.length === 0) return null;
-  return <div className="mt-1 flex flex-col">{rows}</div>;
+  return <div className="flex flex-col">{rows}</div>;
 }
 
 function RowKeyHint({
@@ -4978,7 +5390,7 @@ function RowKeyHint({
       className={[
         "pointer-events-none shrink-0 rounded-md border px-1.5 py-0.5 text-2xs leading-none",
         active
-          ? "border-white/25 bg-white/12 text-white/80"
+          ? "border-ink-900/20 bg-ink-900/10 text-ink-700"
           : "border-paper-300/70 bg-paper-100/75 text-ink-500",
       ].join(" ")}
     >

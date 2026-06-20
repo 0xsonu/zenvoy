@@ -32,7 +32,7 @@ export function EmptyVault(): JSX.Element {
               If you are using the web dev server, you also need{' '}
               <code className="rounded bg-paper-200 px-1 py-0.5">npm run dev:server</code>. You can
               also preconfigure the vault on the server with{' '}
-              <code className="rounded bg-paper-200 px-1 py-0.5">ZENVOY_VAULT_PATH</code>.
+              <code className="rounded bg-paper-200 px-1 py-0.5">ZENNOTES_VAULT_PATH</code>.
             </p>
           )}
           {canConnectRemote && (

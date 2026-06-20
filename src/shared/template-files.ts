@@ -2,7 +2,7 @@
 // so both the renderer (palette, preview, save-as-template) and any Node-side
 // caller share one frontmatter implementation. The main process only does file
 // I/O and never parses, so this is the single source of truth for the format.
-import type { NoteFolder } from '@shared/ipc'
+import type { NoteFolder } from '@bridge/ipc'
 import type { NoteTemplate, TemplateCategory } from '@bridge/templates'
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
