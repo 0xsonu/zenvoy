@@ -10,6 +10,7 @@
  *
  * WYSIWYG-only: registered via `wysiwygExtensions()`.
  */
+import { syntaxTree } from '@codemirror/language'
 import { RangeSetBuilder } from '@codemirror/state'
 import {
   Decoration,
@@ -20,7 +21,7 @@ import {
 } from '@codemirror/view'
 import { useStore } from '../store'
 import { resolveWikilinkTarget, wikilinkHeadingAnchor } from './wikilinks'
-import { openWikilinkHeading } from './wikilink-navigation'
+import { openDatabaseFromWikilink, openWikilinkHeading } from './wikilink-navigation'
 
 // Same shape as the Preview pipeline (remarkWikilinks).
 const WIKILINK_RE = /(!?)\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g
@@ -28,6 +29,22 @@ const hide = Decoration.replace({})
 // Quiet edit markers for the revealed `[[ ]]` / `|` when the cursor is in the
 // wikilink (overrides the orange link highlight so brackets read as markers).
 const bracketMark = Decoration.mark({ class: 'cm-wikilink-bracket' })
+
+/**
+ * True when `pos` sits inside a code span or code block — there `[[...]]` is
+ * literal text, not a link, so it should render as code (matching the Preview
+ * pipeline, whose remark transform never visits code nodes). (#248)
+ */
+function isInsideCode(state: EditorView['state'], pos: number): boolean {
+  let node = syntaxTree(state).resolveInner(pos, 1)
+  while (node) {
+    const n = node.name
+    if (n === 'FencedCode' || n === 'CodeBlock' || n === 'InlineCode') return true
+    if (!node.parent) break
+    node = node.parent
+  }
+  return false
+}
 
 function selectionTouches(
   state: EditorView['state'],
@@ -62,6 +79,8 @@ function buildDecorations(view: EditorView): DecorationSet {
         if (!target) continue
         const matchStart = line.from + m.index
         const matchEnd = matchStart + m[0].length
+        // `[[...]]` inside a code span/block is literal code — leave it raw. (#248)
+        if (isInsideCode(state, matchStart + 2)) continue
         const hasAlias = m[3] != null
         const labelStart = hasAlias
           ? matchStart + 2 + m[2].length + 1 // after `[[target|`
@@ -120,7 +139,11 @@ const wikilinkRenderPlugin = ViewPlugin.fromClass(
 function openWikilink(target: string): void {
   const state = useStore.getState()
   const resolved = resolveWikilinkTarget(state.notes, target)
-  if (!resolved) return // unresolved link — leave note creation to other flows
+  if (!resolved) {
+    // Not a note — maybe a `.base` database; otherwise leave it to other flows.
+    openDatabaseFromWikilink(target)
+    return
+  }
 
   const focusEditorSoon = (): void => {
     useStore.getState().setFocusedPanel('editor')

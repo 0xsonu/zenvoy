@@ -385,14 +385,16 @@ export function inferDailyTaskDueDates(
   return changed ? out : tasks
 }
 
-/** Bucket tasks by `due` ISO date. Done and waiting tasks are skipped.
- *  Tasks without a due date land in the special `'unscheduled'` key. */
+/** Bucket tasks by `due` ISO date. Done (checked) tasks are skipped; waiting
+ *  tasks are kept so a `@waiting` task with a due date still appears on the
+ *  calendar on its date (#236). Tasks without a due date land in the special
+ *  `'unscheduled'` key. */
 export function bucketTasksByDueDate(
   tasks: VaultTask[]
 ): Map<string, VaultTask[]> {
   const map = new Map<string, VaultTask[]>()
   for (const task of tasks) {
-    if (task.checked || task.waiting) continue
+    if (task.checked) continue
     const key = task.due ?? 'unscheduled'
     const list = map.get(key)
     if (list) list.push(task)

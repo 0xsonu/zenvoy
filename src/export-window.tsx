@@ -205,6 +205,29 @@ function ExportNoteWindow({ notePath }: { notePath: string }): JSX.Element {
         .export-note-shell .prose-zen {
           padding: 32px 40px 48px;
         }
+        /* Keep tall images within page height (#231) */
+        .export-note-shell img {
+          max-width: 100%;
+          height: auto;
+          max-height: 9.3in;
+          object-fit: contain;
+        }
+        /* Don't upscale small embedded images to full width (#256) */
+        .export-note-shell .prose-zen .local-image-embed {
+          width: fit-content;
+          max-width: 100%;
+          margin-inline: auto;
+        }
+        .export-note-shell .prose-zen .local-image-embed-frame {
+          width: fit-content;
+          max-width: 100%;
+        }
+        .export-note-shell .prose-zen .local-image-embed-image {
+          width: auto;
+          height: auto;
+          max-width: 100%;
+          max-height: 9.3in;
+        }
         @media print {
           html, body, #root {
             height: auto !important;

@@ -47,6 +47,7 @@ export function TasksView(): JSX.Element {
   const moveTaskToDate = useStore((s) => s.moveTaskToDate)
   const addTaskForDate = useStore((s) => s.addTaskForDate)
   const closeTasksView = useStore((s) => s.closeTasksView)
+  const reorderTaskInNote = useStore((s) => s.reorderTaskInNote)
 
   // Tasks written inside a daily note inherit that note's date as an implicit
   // due date (a clean line, no `due:` token) so they appear on the calendar.
@@ -80,6 +81,9 @@ export function TasksView(): JSX.Element {
   const exRef = useRef<HTMLInputElement>(null)
   const gPending = useRef(0)
   const gTimer = useRef<ReturnType<typeof setTimeout>>()
+  // After a manual reorder the rows re-sort; keep the cursor on the task that
+  // moved so repeated Shift+J/K keep nudging the same one.
+  const followTaskRef = useRef<string | null>(null)
   // Vim-style command line. Not backed by CodeMirror (Tasks has no CM
   // view) — just a tiny bottom-of-panel input that dispatches a handful
   // of ex commands.
@@ -128,6 +132,21 @@ export function TasksView(): JSX.Element {
     if (el) el.scrollIntoView({ block: 'nearest' })
   }, [currentTask, viewMode])
 
+  // Keep the cursor on a task that was just reordered. We match by
+  // sourcePath + content, not id: a line move changes the task's index (and
+  // therefore its `${path}#${index}` id), but its text stays the same.
+  useEffect(() => {
+    const key = followTaskRef.current
+    if (!key) return
+    followTaskRef.current = null
+    const rowIdx = render.rows.findIndex(
+      (r) => r.kind === 'task' && r.task != null && taskFollowKey(r.task) === key
+    )
+    if (rowIdx < 0) return
+    const ti = taskRowIndices.indexOf(rowIdx)
+    if (ti >= 0) setCursorIndex(ti)
+  }, [render.rows, taskRowIndices, setCursorIndex])
+
   const moveCursor = useCallback(
     (delta: number) => {
       if (taskRowIndices.length === 0) return
@@ -135,6 +154,45 @@ export function TasksView(): JSX.Element {
       setCursorIndex(next)
     },
     [safeCursor, setCursorIndex, taskRowIndices.length]
+  )
+
+  // Move the cursored task one slot up/down by swapping with its neighbor in
+  // the same note — this rewrites the note's markdown line order, the single
+  // source of truth. No-op at a group edge or a note boundary (can't move a
+  // task line into a different file).
+  const moveSelectedTask = useCallback(
+    (delta: -1 | 1) => {
+      if (viewMode !== 'list' || !currentTask) return
+      const row = render.rows[currentRowIdx]
+      if (!row || row.kind !== 'task') return
+      const list = render.groups[row.group]
+      const from = list.findIndex((t) => t.id === currentTask.id)
+      const neighbor = from >= 0 ? list[from + delta] : undefined
+      if (!neighbor || neighbor.sourcePath !== currentTask.sourcePath) return
+      followTaskRef.current = taskFollowKey(currentTask)
+      void reorderTaskInNote(currentTask, neighbor, delta < 0 ? 'before' : 'after')
+    },
+    [viewMode, currentTask, currentRowIdx, render.rows, render.groups, reorderTaskInNote]
+  )
+
+  // Drag-to-reorder: only within the same note (a task line can't move between
+  // files), so cross-note drops are ignored.
+  const reorderTaskByDrag = useCallback(
+    (draggedId: string, targetId: string, position: 'before' | 'after') => {
+      if (draggedId === targetId) return
+      const keys: GroupKey[] = ['today', 'upcoming', 'waiting', 'done']
+      for (const group of keys) {
+        const list = render.groups[group]
+        const dragged = list.find((t) => t.id === draggedId)
+        const target = list.find((t) => t.id === targetId)
+        if (dragged && target && dragged.sourcePath === target.sourcePath) {
+          followTaskRef.current = taskFollowKey(dragged)
+          void reorderTaskInNote(dragged, target, position)
+          return
+        }
+      }
+    },
+    [render.groups, reorderTaskInNote]
   )
 
   const toggleGroup = useCallback((g: GroupKey) => {
@@ -300,6 +358,19 @@ export function TasksView(): JSX.Element {
         moveCursor(-1)
         return
       }
+      // Task reorder works whether or not Vim mode is on (Shift+J/K are an
+      // explicit action chord, not a single-key list shortcut), so match the
+      // binding directly rather than through the Vim-gated `seq` helper.
+      if (matchesSequenceToken(e, overrides, 'tasks.moveTaskUp')) {
+        consume()
+        moveSelectedTask(-1)
+        return
+      }
+      if (matchesSequenceToken(e, overrides, 'tasks.moveTaskDown')) {
+        consume()
+        moveSelectedTask(1)
+        return
+      }
       if (seq('nav.jumpBottom')) {
         consume()
         setCursorIndex(taskRowIndices.length - 1)
@@ -337,6 +408,7 @@ export function TasksView(): JSX.Element {
     isActivePanel,
     filter,
     moveCursor,
+    moveSelectedTask,
     setCursorIndex,
     taskRowIndices.length,
     currentTask,
@@ -472,6 +544,7 @@ export function TasksView(): JSX.Element {
                   const ti = taskRowIndices.indexOf(idx)
                   if (ti >= 0) setCursorIndex(ti)
                 }}
+                onReorder={reorderTaskByDrag}
               />
             )
           })}
@@ -538,7 +611,7 @@ export function TasksView(): JSX.Element {
       ) : (
         <div className="border-t border-paper-300/45 px-4 py-1.5 text-xs text-current/40">
           {viewMode === 'list'
-            ? 'j/k move · Enter/o open · Space/x toggle · / filter · 1/2/3 view · : command · :q close'
+            ? 'j/k move · J/K reorder · drag to reorder · Enter/o open · Space/x toggle · / filter · :q close'
             : viewMode === 'calendar'
               ? 'h/j/k/l day · [ ] month · gt today · Tab pick · < > reschedule · drag to move · Enter open · :q'
               : 'h/l column · j/k card · Space toggle · Enter open · 1/2/3 view · : command · :q close'}
@@ -546,6 +619,12 @@ export function TasksView(): JSX.Element {
       )}
     </div>
   )
+}
+
+/** Stable identity for cursor-follow across a reorder: a task's id encodes its
+ *  index (which a line move changes), but sourcePath + content do not. */
+function taskFollowKey(task: VaultTask): string {
+  return `${task.sourcePath} ${task.content}`
 }
 
 function cssEscape(value: string): string {

@@ -14,6 +14,7 @@ import {
   textObjectRange
 } from './cm-table'
 import { closeTableContextMenu } from './cm-table-menu'
+import { useStore } from '../store'
 
 const TABLE_DOC = `Intro text.
 
@@ -79,6 +80,43 @@ describe('tablePlugin', () => {
     const xEv = new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true })
     cell.dispatchEvent(xEv)
     expect(xEv.defaultPrevented).toBe(true)
+    view.destroy()
+  })
+
+  // #232: arrow keys used to fall through to CodeMirror and scroll the page;
+  // they should navigate the cell like h/j/k/l (consumed, not propagated).
+  it('consumes arrow keys inside a cell instead of scrolling the page (#232)', () => {
+    const view = mount(TABLE_DOC)
+    const cell = view.dom.querySelector<HTMLElement>(
+      '.cm-table-widget [data-row="0"][data-col="0"]'
+    )!
+    for (const key of ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight']) {
+      const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      cell.dispatchEvent(ev)
+      expect(ev.defaultPrevented).toBe(true)
+    }
+    view.destroy()
+  })
+
+  // #213: directional cell navigation honors the configurable nav keymaps.
+  it('honors a remapped nav key (nav.moveDown → n) inside a cell', () => {
+    const view = mount(TABLE_DOC)
+    const prev = useStore.getState().keymapOverrides
+    useStore.setState({ keymapOverrides: { ...prev, 'nav.moveDown': 'n' } })
+    try {
+      const start = view.dom.querySelector<HTMLElement>(
+        '.cm-table-widget [data-row="0"][data-col="0"]'
+      )!
+      start.focus()
+      const ev = new KeyboardEvent('keydown', { key: 'n', bubbles: true, cancelable: true })
+      start.dispatchEvent(ev)
+      expect(ev.defaultPrevented).toBe(true)
+      // The remapped key moved the focus down a row, like `j` would by default.
+      const below = view.dom.querySelector('.cm-table-widget [data-row="1"][data-col="0"]')
+      expect(document.activeElement).toBe(below)
+    } finally {
+      useStore.setState({ keymapOverrides: prev })
+    }
     view.destroy()
   })
 

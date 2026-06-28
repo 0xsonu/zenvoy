@@ -47,6 +47,7 @@ import type {
   McpInstructionsPayload,
   McpServerRuntime
 } from '@shared/mcp-clients'
+import type { AppConfigPortable } from '@shared/app-config'
 
 export interface ZenCapabilities {
   supportsUpdater: boolean
@@ -153,6 +154,8 @@ export interface ZenBridge {
   createNote(folder: NoteFolder, title?: string, subpath?: string): Promise<NoteMeta>
   /** Create a new `.excalidraw` drawing seeded with an empty scene. */
   createExcalidraw(folder: NoteFolder, subpath?: string, title?: string): Promise<NoteMeta>
+  /** Convert an Obsidian Excalidraw markdown drawing into a native `.excalidraw`. (#266) */
+  convertObsidianExcalidraw?(relPath: string): Promise<NoteMeta>
   renameNote(relPath: string, nextTitle: string): Promise<NoteMeta>
   deleteNote(relPath: string): Promise<void>
   moveToTrash(relPath: string): Promise<NoteMeta>
@@ -195,7 +198,9 @@ export interface ZenBridge {
   windowToggleMaximize(): void
   windowClose(): void
   openNoteWindow(relPath: string): Promise<void>
-  openVaultWindow(): Promise<VaultInfo | null>
+  /** Open a vault in a new window. With a `root`, opens that known vault
+   *  directly; without one, prompts with the folder picker. */
+  openVaultWindow(root?: string): Promise<VaultInfo | null>
 
   /** Read the markdown file bound to the current standalone editor window. */
   readExternalFile(): Promise<ExternalFileContent>
@@ -232,6 +237,24 @@ export interface ZenBridge {
   raycastInstall(): Promise<RaycastExtensionStatus>
   clipboardWriteText(text: string): void
   clipboardReadText(): string
+
+  /**
+   * Portable preferences read synchronously from the on-disk config file at
+   * startup (desktop). Returns null on platforms without a config file (web),
+   * where the renderer falls back to localStorage. An empty object means the
+   * file doesn't exist yet — the renderer seeds it from current prefs.
+   */
+  getConfigSync(): AppConfigPortable | null
+  /** Persist the portable preferences subset to the config file (debounced by
+   *  the caller). No-op on web. */
+  setConfig(next: AppConfigPortable): Promise<void>
+  /** Absolute path of the config file, or null when unsupported (web). */
+  getConfigPath(): Promise<string | null>
+  /** Create the config file if needed and reveal it in the OS file manager. */
+  revealConfigFile(): Promise<void>
+  /** Subscribe to external edits of the config file (e.g. a synced dotfile or
+   *  a hand-edit). The callback receives the new portable config. */
+  onConfigChange(cb: (next: AppConfigPortable) => void): () => void
 }
 
 let installedBridge: ZenBridge | null = null

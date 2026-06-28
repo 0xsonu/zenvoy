@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Vim, getCM } from '@replit/codemirror-vim'
+import { moveLineDown, moveLineUp } from '@codemirror/commands'
 import { foldAll, unfoldAll, foldCode, unfoldCode } from '@codemirror/language'
 import { isTagsViewActive, isTasksViewActive, useStore } from '../store'
 import { buildCommands, type Command } from '../lib/commands'
@@ -23,7 +24,7 @@ import {
   suggestCreateNotePath,
   wikilinkHeadingAnchor
 } from '../lib/wikilinks'
-import { openWikilinkHeading } from '../lib/wikilink-navigation'
+import { openDatabaseFromWikilink, openWikilinkHeading } from '../lib/wikilink-navigation'
 import { classifyLocalAssetHref, resolveAssetVaultRelativePath } from '../lib/local-assets'
 import { externalLinkUrl, extractLinkAtCursor, resolveInternalNoteHref } from '../lib/internal-links'
 import {
@@ -332,6 +333,22 @@ function registerVimCommands(): void {
   }
   clearKnownVimMappings()
 
+  // Visual-line reorder: select line(s) with Shift+V, then Shift+J / Shift+K
+  // move the selection down / up — the well-known Vim "move selected lines"
+  // mapping. Overrides J/K in *visual* mode only; normal-mode join (J) and
+  // keyword-lookup (K) are left untouched. moveLineDown/Up act on every line
+  // the selection spans and keep it selected.
+  Vim.defineAction('zenMoveSelectionDown', (cm: ReturnType<typeof getCM>) => {
+    const view = (cm as unknown as { cm6?: EditorView }).cm6
+    if (view) moveLineDown(view)
+  })
+  Vim.defineAction('zenMoveSelectionUp', (cm: ReturnType<typeof getCM>) => {
+    const view = (cm as unknown as { cm6?: EditorView }).cm6
+    if (view) moveLineUp(view)
+  })
+  Vim.mapCommand('J', 'action', 'zenMoveSelectionDown', {}, { context: 'visual' })
+  Vim.mapCommand('K', 'action', 'zenMoveSelectionUp', {}, { context: 'visual' })
+
   Vim.defineEx('write', 'w', () => {
     void useStore.getState().persistActive()
   })
@@ -529,6 +546,13 @@ function registerVimCommands(): void {
       } else {
         void state.selectNote(internal.path).then(focusEditorSoon)
       }
+      return
+    }
+
+    // Not a note — maybe a `.base` database link.
+    if (openDatabaseFromWikilink(target)) {
+      state.setFocusedPanel('editor')
+      requestAnimationFrame(() => useStore.getState().editorViewRef?.focus())
       return
     }
 

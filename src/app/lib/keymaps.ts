@@ -74,6 +74,8 @@ export type KeymapId =
   | "vim.unfoldAll"
   | "nav.moveDown"
   | "nav.moveUp"
+  | "nav.moveLeft"
+  | "nav.moveRight"
   | "nav.jumpTop"
   | "nav.jumpBottom"
   | "nav.halfPageDown"
@@ -90,7 +92,11 @@ export type KeymapId =
   | "nav.toggleTask"
   | "nav.localEx"
   | "nav.newQuickNote"
-  | "nav.unarchive";
+  | "nav.unarchive"
+  | "tasks.moveTaskUp"
+  | "tasks.moveTaskDown"
+  | "editor.moveLineUp"
+  | "editor.moveLineDown";
 
 export type KeymapOverrides = Partial<Record<KeymapId, string>>;
 
@@ -771,6 +777,26 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     maxTokens: 1,
   },
   {
+    id: "nav.moveLeft",
+    kind: "sequence",
+    scope: "lists",
+    group: "navigation",
+    title: "Move selection left",
+    description: "Move left between cells in a WYSIWYG table (and within cell text).",
+    defaultBinding: "h",
+    maxTokens: 1,
+  },
+  {
+    id: "nav.moveRight",
+    kind: "sequence",
+    scope: "lists",
+    group: "navigation",
+    title: "Move selection right",
+    description: "Move right between cells in a WYSIWYG table (and within cell text).",
+    defaultBinding: "l",
+    maxTokens: 1,
+  },
+  {
     id: "nav.jumpTop",
     kind: "sequence",
     scope: "lists",
@@ -913,6 +939,48 @@ const KEYMAP_DEFINITIONS: KeymapDefinition[] = [
     description: "Check or uncheck the selected task.",
     defaultBinding: "x",
     maxTokens: 1,
+  },
+  {
+    id: "tasks.moveTaskUp",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Move task up",
+    description:
+      "Move the selected task up within its group (Tasks list view). Works with Vim mode on or off.",
+    defaultBinding: "K",
+    maxTokens: 1,
+  },
+  {
+    id: "tasks.moveTaskDown",
+    kind: "sequence",
+    scope: "views",
+    group: "view-actions",
+    title: "Move task down",
+    description:
+      "Move the selected task down within its group (Tasks list view). Works with Vim mode on or off.",
+    defaultBinding: "J",
+    maxTokens: 1,
+  },
+  {
+    id: "editor.moveLineUp",
+    kind: "shortcut",
+    scope: "vim-editor",
+    group: "view-actions",
+    title: "Move line up",
+    description:
+      "Move the current line (or selected lines) up in the note editor — reorders the markdown, so it sticks in the file. Works with Vim mode on or off.",
+    defaultBinding: "Alt+ArrowUp",
+  },
+  {
+    id: "editor.moveLineDown",
+    kind: "shortcut",
+    scope: "vim-editor",
+    group: "view-actions",
+    title: "Move line down",
+    description:
+      "Move the current line (or selected lines) down in the note editor — reorders the markdown, so it sticks in the file. Works with Vim mode on or off.",
+    defaultBinding: "Alt+ArrowDown",
   },
   {
     id: "nav.localEx",

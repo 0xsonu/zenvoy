@@ -292,6 +292,11 @@ export function createTauriBridge(): ZenBridge {
     // ── Clipboard ────────────────────────────────────────────────────
     clipboardWriteText: (text) => { invoke('clipboard_write_text', { text }) },
     clipboardReadText: () => '',
+    getConfigSync: () => null,
+    setConfig: async () => {},
+    getConfigPath: async () => null,
+    revealConfigFile: async () => {},
+    onConfigChange: () => () => {},
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildVaultSwitcherEntries } from './vault-switcher'
+import { buildVaultSwitcherEntries, newWindowVaultRows } from './vault-switcher'
 
 describe('buildVaultSwitcherEntries', () => {
   it('keeps the current local vault and recent local vaults in the switcher list', () => {
@@ -141,5 +141,40 @@ describe('buildVaultSwitcherEntries', () => {
 
     const current = entries.find((entry) => entry.current)
     expect(current?.name).toBe('Home')
+  })
+})
+
+describe('newWindowVaultRows (#244)', () => {
+  it('lists known local vaults then a Browse fallback, dropping remotes', () => {
+    const entries = buildVaultSwitcherEntries({
+      localVaults: [
+        { root: '/vaults/work', name: 'Work', lastOpenedAt: 2 },
+        { root: '/vaults/personal', name: 'Personal', lastOpenedAt: 3 }
+      ],
+      remoteProfiles: [
+        {
+          id: 'r1',
+          name: 'Server',
+          baseUrl: 'https://example.com',
+          hasCredential: true,
+          vaultPath: '/srv',
+          lastConnectedAt: 1
+        }
+      ],
+      currentVault: { root: '/vaults/personal', name: 'Personal' },
+      workspaceMode: 'local',
+      remoteWorkspaceInfo: null
+    })
+
+    const rows = newWindowVaultRows(entries)
+    // Remote entry dropped; local vaults kept in order; Browse row appended last.
+    expect(rows.map((r) => r.kind)).toEqual(['local', 'local', 'browse'])
+    expect(rows.at(-1)).toMatchObject({ kind: 'browse', current: false })
+  })
+
+  it('returns just the Browse row when there are no known vaults', () => {
+    const rows = newWindowVaultRows([])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].kind).toBe('browse')
   })
 })

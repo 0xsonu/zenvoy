@@ -35,6 +35,7 @@ import { renderMarkdown } from './markdown'
 import { getCM } from '@replit/codemirror-vim'
 import { undo, redo } from '@codemirror/commands'
 import { useStore } from '../store'
+import { matchesSequenceToken } from './keymaps'
 
 /** True when the editor is in Vim mode — gates the table's modal (normal /
  *  insert) keyboard navigation. With Vim off, cells stay plain contenteditable
@@ -534,23 +535,35 @@ class TableWidget extends WidgetType {
           this.applyOperator(editable, op, event.key, cellText)
           return
         }
+        // Directional cell navigation. Honors the configurable nav keymaps
+        // (defaults h/l/j/k) so non-QWERTY layouts can remap them (#213), and
+        // arrow keys always work (#232). Only plain navigation is remappable —
+        // the Vim motions/operators in the switch below stay standard Vim.
+        const navOverrides = useStore.getState().keymapOverrides
+        if (event.key === 'ArrowLeft' || matchesSequenceToken(event, navOverrides, 'nav.moveLeft')) {
+          event.preventDefault()
+          this.moveCharLeft(editable, row, col)
+          return
+        }
+        if (
+          event.key === 'ArrowRight' ||
+          matchesSequenceToken(event, navOverrides, 'nav.moveRight')
+        ) {
+          event.preventDefault()
+          this.moveCharRight(editable, row, col)
+          return
+        }
+        if (event.key === 'ArrowDown' || matchesSequenceToken(event, navOverrides, 'nav.moveDown')) {
+          event.preventDefault()
+          this.moveRowDown(row, col)
+          return
+        }
+        if (event.key === 'ArrowUp' || matchesSequenceToken(event, navOverrides, 'nav.moveUp')) {
+          event.preventDefault()
+          this.moveRowUp(row, col)
+          return
+        }
         switch (event.key) {
-          case 'h':
-            event.preventDefault()
-            this.moveCharLeft(editable, row, col)
-            return
-          case 'l':
-            event.preventDefault()
-            this.moveCharRight(editable, row, col)
-            return
-          case 'j':
-            event.preventDefault()
-            this.moveRowDown(row, col)
-            return
-          case 'k':
-            event.preventDefault()
-            this.moveRowUp(row, col)
-            return
           case 'i':
             event.preventDefault()
             this.enterInsertMode(editable, this.cursorOffset)
@@ -673,6 +686,22 @@ class TableWidget extends WidgetType {
     for (let r = 0; r < rowsCount; r++)
       for (let c = 0; c < cols; c++) order.push({ row: r, col: c })
     const idx = order.findIndex((a) => a.row === row && a.col === col)
+
+    // Keep arrow keys inside the table. Without this they fall through to
+    // CodeMirror, whose caret can't enter the atomic table widget, so the main
+    // selection jumps to a line outside the table and the page scrolls (#232).
+    // Up/Down move between rows; Left/Right move the caret within the cell text
+    // (the browser handles that natively in an editable cell) without scrolling.
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      const targetRow = event.key === 'ArrowDown' ? (row === -1 ? 0 : row + 1) : row - 1
+      if (targetRow >= -1 && targetRow < rowsCount) this.moveFocus({ row: targetRow, col })
+      return
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.stopPropagation()
+      return
+    }
 
     if (event.key === 'Tab') {
       event.preventDefault()
@@ -1368,7 +1397,11 @@ export const tableVimEntry = Prec.highest(
   EditorView.domEventHandlers({
     keydown(event, view) {
       if (!vimEnabled()) return false
-      if (event.key !== 'j' && event.key !== 'k') return false
+      const navOverrides = useStore.getState().keymapOverrides
+      const down =
+        event.key === 'ArrowDown' || matchesSequenceToken(event, navOverrides, 'nav.moveDown')
+      const up = event.key === 'ArrowUp' || matchesSequenceToken(event, navOverrides, 'nav.moveUp')
+      if (!down && !up) return false
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
       // Keys from inside a table widget are the widget's own cell navigation —
       // this handler only enters a table from the surrounding document.
@@ -1378,7 +1411,7 @@ export const tableVimEntry = Prec.highest(
       const sel = view.state.selection.main
       if (!sel.empty) return false
       const line = view.state.doc.lineAt(sel.head).number
-      const dir = event.key === 'j' ? 'down' : 'up'
+      const dir = down ? 'down' : 'up'
       const table = adjacentTableRange(view.state, line, dir)
       if (!table) return false
       if (focusTableEntryCell(view, table.from, dir === 'down' ? 'first' : 'last')) {

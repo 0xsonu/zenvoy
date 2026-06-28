@@ -21,8 +21,8 @@ import {
   EditorState,
   StateEffect,
   StateField,
-  type Extension,
-  type Transaction
+  Transaction,
+  type Extension
 } from '@codemirror/state'
 import {
   Decoration,
@@ -42,6 +42,8 @@ import {
   history,
   historyKeymap,
   indentWithTab,
+  moveLineDown,
+  moveLineUp,
   redo,
   selectAll,
   undo
@@ -74,12 +76,13 @@ import { codeBlockFlairPlugin } from '../lib/cm-code-block-flair'
 import { tablePlugin, tableVimEntry } from '../lib/cm-table'
 import { wysiwygBlocksPlugin } from '../lib/cm-wysiwyg-blocks'
 import { hashtagExtension } from '../lib/cm-hashtags'
+import { applyHighlight, HIGHLIGHT_COLORS, highlightExtension } from '../lib/cm-highlight'
 import { wikilinkRenderExtension } from '../lib/cm-wikilink-render'
 import { slashCommandSource, slashCommandRender } from '../lib/cm-slash-commands'
 import { dateShortcutSource } from '../lib/cm-date-shortcuts'
 import { wikilinkSource, wikilinkHeadingSource } from '../lib/cm-wikilinks'
 import { resolveWikilinkTarget, wikilinkHeadingAnchor } from '../lib/wikilinks'
-import { openWikilinkHeading } from '../lib/wikilink-navigation'
+import { openDatabaseFromWikilink, openWikilinkHeading } from '../lib/wikilink-navigation'
 import {
   externalLinkUrl,
   extractLinkAtCursor,
@@ -99,7 +102,13 @@ import { promptApp } from '../lib/prompt-requests'
 import { TasksView } from './TasksView'
 import { DatabaseView } from './DatabaseView'
 import { LazyExcalidrawView } from './LazyExcalidrawView'
-import { isExcalidrawPath } from '@shared/excalidraw'
+import { ObsidianExcalidrawPrompt } from './ObsidianExcalidrawPrompt'
+import { HomeView } from './HomeView'
+import {
+  isExcalidrawPath,
+  isObsidianExcalidrawMarkdown,
+  isObsidianExcalidrawPath
+} from '@shared/excalidraw'
 import { TagView } from './TagView'
 import { HelpView } from './HelpView'
 import { ArchiveView } from './ArchiveView'
@@ -160,6 +169,7 @@ import {
   DocumentIcon,
   FileDownIcon,
   FeedbackIcon,
+  HighlighterIcon,
   ListTreeIcon,
   PanelLeftIcon,
   PanelRightIcon,
@@ -210,7 +220,13 @@ import {
   isDiagramTabPath
 } from '../lib/diagram-tabs'
 import { classifyLocalAssetHref } from '../lib/local-assets'
-import { formatKeyToken, getKeymapDisplay, type KeymapId } from '../lib/keymaps'
+import {
+  formatKeyToken,
+  getKeymapBinding,
+  getKeymapDisplay,
+  type KeymapId,
+  type KeymapOverrides
+} from '../lib/keymaps'
 import { isTabStripOverflowing } from '../lib/tab-strip-overflow'
 
 const MODE_OPTIONS: Array<{
@@ -233,10 +249,21 @@ const LARGE_DOC_LIVE_PREVIEW_DEFER_CHARS = 120_000
 const LARGE_DOC_LIVE_PREVIEW_DEFER_MS = 3_000
 const LARGE_DOC_EDITOR_HYDRATE_DELAY_MS = 180
 
+/** Convert a Zenvoy binding string ("Alt+ArrowUp", "Mod+K") to a CodeMirror
+ *  key string ("Alt-ArrowUp", "Mod-k"). */
+function toCmKey(binding: string): string {
+  const parts = binding.split('+')
+  const base = parts.pop() ?? ''
+  const mods = parts.join('-')
+  const baseOut = base.length === 1 ? base.toLowerCase() : base
+  return mods ? `${mods}-${baseOut}` : baseOut
+}
+
 // The editor keymap depends on Vim mode: in Vim mode the macOS emacs-style
 // chords are stripped from `defaultKeymap` so Vim's `<C-d>` & co. work (see
-// cm-vim-default-keymap). Built behind a compartment and reconfigured on toggle.
-function buildEditorKeymap(vimMode: boolean): Extension {
+// cm-vim-default-keymap). Built behind a compartment and reconfigured on Vim
+// toggle or keymap-override changes.
+function buildEditorKeymap(vimMode: boolean, overrides: KeymapOverrides): Extension {
   return keymap.of([
     {
       key: 'Mod-f',
@@ -247,6 +274,11 @@ function buildEditorKeymap(vimMode: boolean): Extension {
         return true
       }
     },
+    // Move the current line (or selection) up/down — reorders the markdown so
+    // it persists in the file. Listed before defaultKeymap so the configured
+    // binding wins; works in Vim normal/insert and non-Vim alike.
+    { key: toCmKey(getKeymapBinding(overrides, 'editor.moveLineUp')), run: moveLineUp },
+    { key: toCmKey(getKeymapBinding(overrides, 'editor.moveLineDown')), run: moveLineDown },
     indentWithTab,
     ...vimAwareDefaultKeymap(vimMode),
     ...historyKeymap,
@@ -284,14 +316,16 @@ function markdownSyntaxHighlightExtensions(): Extension[] {
  * frontmatter-properties panel is intentionally excluded — it depends on
  * the PR's breaking database restructure.
  */
-function wysiwygExtensions(): Extension[] {
+function wysiwygExtensions(renderTables: boolean): Extension[] {
   return [
     livePreviewPlugin,
     codeBlockFlairPlugin,
-    tablePlugin,
-    tableVimEntry,
+    // Table widgets are gated on a setting — off keeps tables as plain editable
+    // markdown for full keyboard/Vim editing (#232).
+    ...(renderTables ? [tablePlugin, tableVimEntry] : []),
     wysiwygBlocksPlugin,
     ...hashtagExtension,
+    ...highlightExtension,
     ...wikilinkRenderExtension
   ]
 }
@@ -628,6 +662,10 @@ function followEditorLink(target: string): boolean {
     else void state.selectNote(wikilink.path).then(focusSoon)
     return true
   }
+  if (openDatabaseFromWikilink(target)) {
+    focusSoon()
+    return true
+  }
   return false
 }
 
@@ -687,6 +725,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
   const vimMode = useStore((s) => s.vimMode)
   const vimYankToClipboard = useStore((s) => s.vimYankToClipboard)
   const livePreview = useStore((s) => s.livePreview)
+  const renderTablesInLivePreview = useStore((s) => s.renderTablesInLivePreview)
   const editorFontSize = useStore((s) => s.editorFontSize)
   const editorLineHeight = useStore((s) => s.editorLineHeight)
   const lineNumberMode = useStore((s) => s.lineNumberMode)
@@ -771,6 +810,9 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
   const livePreviewCompartmentRef = useRef<Compartment | null>(null)
   const lineNumbersCompartmentRef = useRef<Compartment | null>(null)
   const wordWrapCompartmentRef = useRef<Compartment | null>(null)
+  // history() lives in a compartment so we can reset undo history on a note
+  // switch — otherwise Cmd+Z crosses notes and overwrites the current one (#247).
+  const historyCompartmentRef = useRef<Compartment | null>(null)
   const ignoreEditorScrollRef = useRef(false)
   const ignorePreviewScrollRef = useRef(false)
   const pendingOutlineJumpLineRef = useRef<number | null>(null)
@@ -1404,6 +1446,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       const livePreviewCompartment = new Compartment()
       const lineNumbersCompartment = new Compartment()
       const wordWrapCompartment = new Compartment()
+      const historyCompartment = new Compartment()
       vimCompartmentRef.current = vimCompartment
       editorKeymapCompartmentRef.current = editorKeymapCompartment
       markdownCompartmentRef.current = markdownCompartment
@@ -1411,6 +1454,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
       livePreviewCompartmentRef.current = livePreviewCompartment
       lineNumbersCompartmentRef.current = lineNumbersCompartment
       wordWrapCompartmentRef.current = wordWrapCompartment
+      historyCompartmentRef.current = historyCompartment
       const s0 = useStore.getState()
       const initialPath = findLeaf(s0.paneLayout, paneId)?.activeTab ?? null
       const initialContent = initialPath ? s0.noteContents[initialPath] ?? null : null
@@ -1424,7 +1468,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         extensions: [
           appMarkdownSnippetExtension(),
           vimCompartment.of(s0.vimMode ? vim() : []),
-          history(),
+          historyCompartment.of(history()),
           drawSelection(),
           highlightActiveLine(),
           taskJumpHighlightField,
@@ -1436,7 +1480,9 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             deferInitialRichMarkdown ? [] : markdownSyntaxHighlightExtensions()
           ),
           livePreviewCompartment.of(
-            s0.livePreview && !deferInitialRichMarkdown ? wysiwygExtensions() : []
+            s0.livePreview && !deferInitialRichMarkdown
+              ? wysiwygExtensions(s0.renderTablesInLivePreview)
+              : []
           ),
           lineNumbersCompartment.of(lineNumberExtension(s0.lineNumberMode)),
           tooltips({ parent: document.body }),
@@ -1450,7 +1496,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
                 : 'slash-cmd-option'
           }),
           completionNavKeymap,
-          editorKeymapCompartment.of(buildEditorKeymap(s0.vimMode)),
+          editorKeymapCompartment.of(buildEditorKeymap(s0.vimMode, s0.keymapOverrides)),
           EditorView.domEventHandlers({
             mousedown: (event, view) => {
               const target = event.target as HTMLElement | null
@@ -1590,7 +1636,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             markdownSyntaxCompartment.reconfigure(markdownSyntaxHighlightExtensions())
           ]
           if (useStore.getState().livePreview) {
-            restoreEffects.push(livePreviewCompartment.reconfigure(wysiwygExtensions()))
+            restoreEffects.push(livePreviewCompartment.reconfigure(wysiwygExtensions(useStore.getState().renderTablesInLivePreview)))
           }
           view.dispatch({ effects: restoreEffects })
         }, LARGE_DOC_LIVE_PREVIEW_DEFER_MS)
@@ -1682,16 +1728,33 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         markdownSyntaxCompartment.reconfigure(markdownSyntaxHighlightExtensions())
       )
       if (livePreviewEnabled && livePreviewCompartment) {
-        effects.push(livePreviewCompartment.reconfigure(wysiwygExtensions()))
+        effects.push(livePreviewCompartment.reconfigure(wysiwygExtensions(useStore.getState().renderTablesInLivePreview)))
       }
     }
     const dispatchStartedAt = performance.now()
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: nextBody },
-      annotations: [programmatic.of(true), skipOrderedListRenumber.of(true)],
+      annotations: [
+        programmatic.of(true),
+        skipOrderedListRenumber.of(true),
+        // A programmatic swap (tab switch / external file sync) must never be
+        // undoable — otherwise Cmd+Z reverts the editor to the other document
+        // and the resulting change saves it over the current note (#247).
+        Transaction.addToHistory.of(false)
+      ],
       effects: effects.length > 0 ? effects : undefined,
       selection: pathChanged ? { anchor: 0 } : { anchor: clampedAnchor, head: clampedHead }
     })
+    if (pathChanged) {
+      // Switching notes: also drop the previous note's undo history so undo
+      // can't cross the boundary at all. There's no "clear history" command, so
+      // remove the history field then re-add it empty. (#247)
+      const historyCompartment = historyCompartmentRef.current
+      if (historyCompartment) {
+        view.dispatch({ effects: historyCompartment.reconfigure([]) })
+        view.dispatch({ effects: historyCompartment.reconfigure(history()) })
+      }
+    }
     if (pathChanged && pendingJumpLocation?.path !== nextPath) {
       // Clear scroll on a genuine tab switch; the activation effect below
       // restores a remembered position afterward when there is one.
@@ -1729,7 +1792,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
           markdownSyntaxCompartment.reconfigure(markdownSyntaxHighlightExtensions())
         ]
         if (useStore.getState().livePreview && livePreviewCompartment) {
-          restoreEffects.push(livePreviewCompartment.reconfigure(wysiwygExtensions()))
+          restoreEffects.push(livePreviewCompartment.reconfigure(wysiwygExtensions(useStore.getState().renderTablesInLivePreview)))
         }
         view.dispatch({
           effects: restoreEffects
@@ -1761,9 +1824,9 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     if (!view || !comp) return
     const effects = [comp.reconfigure(vimMode ? vim() : [])]
     const keymapComp = editorKeymapCompartmentRef.current
-    if (keymapComp) effects.push(keymapComp.reconfigure(buildEditorKeymap(vimMode)))
+    if (keymapComp) effects.push(keymapComp.reconfigure(buildEditorKeymap(vimMode, tabNavOverrides)))
     view.dispatch({ effects })
-  }, [vimMode])
+  }, [vimMode, tabNavOverrides])
   useEffect(() => {
     const view = viewRef.current
     const comp = livePreviewCompartmentRef.current
@@ -1784,13 +1847,13 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             markdownSyntaxCompartment.reconfigure(markdownSyntaxHighlightExtensions())
           )
         }
-        effects.push(comp.reconfigure(wysiwygExtensions()))
+        effects.push(comp.reconfigure(wysiwygExtensions(useStore.getState().renderTablesInLivePreview)))
         view.dispatch({ effects })
       }
       return
     }
-    view.dispatch({ effects: comp.reconfigure(livePreview ? wysiwygExtensions() : []) })
-  }, [livePreview])
+    view.dispatch({ effects: comp.reconfigure(livePreview ? wysiwygExtensions(useStore.getState().renderTablesInLivePreview) : []) })
+  }, [livePreview, renderTablesInLivePreview])
   useEffect(() => {
     const view = viewRef.current
     const comp = lineNumbersCompartmentRef.current
@@ -1947,6 +2010,12 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
   useEffect(() => {
     if (!isActive) return
     if (focusedPanel !== 'editor') return
+    // A freshly created note focuses its title-rename field first (#214). That
+    // input's onFocus flips focusedPanel to 'editor', which re-runs this effect
+    // — don't bounce focus out of the title field and into the body H1. The
+    // editor takes focus explicitly once the rename is committed (Enter/Escape).
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active.dataset.noteTitleInput != null) return
     viewRef.current?.focus()
   }, [isActive, focusedPanel])
 
@@ -2278,7 +2347,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         if (isTasksTabPath(path)) {
           return {
             ...base,
-            title: 'Tasks',
+            title: folderLabels.tasks,
             isTasks: true
           }
         }
@@ -2354,7 +2423,7 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         }
       })
     },
-    [tabs, pinnedTabs, previewTab, content, notes, folderLabels.quick, folderLabels.archive, folderLabels.trash]
+    [tabs, pinnedTabs, previewTab, content, notes, folderLabels.quick, folderLabels.archive, folderLabels.trash, folderLabels.tasks]
   )
 
   const tabMenuItems = useMemo<ContextMenuItem[]>(() => {
@@ -3235,6 +3304,11 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             <DatabaseView tabPath={activeTab} isActive={isActive} />
           ) : activeTab && isExcalidrawPath(activeTab) ? (
             <LazyExcalidrawView path={activeTab} />
+          ) : activeTab &&
+            content &&
+            (isObsidianExcalidrawPath(activeTab) ||
+              isObsidianExcalidrawMarkdown(content.body)) ? (
+            <ObsidianExcalidrawPrompt path={activeTab} />
           ) : content ? (
             <div
               className={[
@@ -3321,10 +3395,18 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
             <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-ink-400">
               Loading…
             </div>
-          ) : (
+          ) : zenMode ? (
             <EmptyPaneState
               sidebarOpen={sidebarOpen}
               zenMode={zenMode}
+              onShowSidebar={() => {
+                toggleSidebar()
+                setFocusedPanel('sidebar')
+              }}
+            />
+          ) : (
+            <HomeView
+              sidebarOpen={sidebarOpen}
               onShowSidebar={() => {
                 toggleSidebar()
                 setFocusedPanel('sidebar')
@@ -3475,12 +3557,46 @@ function AssetTabView({
  * Build the right-click menu shown over the editor text. Uses the live
  * CodeMirror view for clipboard / undo / redo / select-all commands.
  */
+function HighlightSwatch({ color }: { color: string }): JSX.Element {
+  return (
+    <span
+      className="inline-block h-3.5 w-3.5 rounded-[3px] border border-paper-300"
+      style={{ backgroundColor: `rgb(var(--hl-${color}) / 0.7)` }}
+    />
+  )
+}
+
 function buildEditorContextItems(
   view: EditorView | null,
   hasSelection: boolean,
   onAddComment: () => void
 ): ContextMenuItem[] {
   if (!view) return []
+
+  // "Highlight" group (selection only): default (yellow) via `==`, named colors
+  // via `<mark class>`, and a remove action. Shares applyHighlight with ⇧⌘H.
+  const highlightItems: ContextMenuItem[] = hasSelection
+    ? [
+        {
+          label: 'Highlight',
+          hint: formatKeyToken('Mod+Shift+H'),
+          icon: <HighlighterIcon width={14} height={14} />,
+          onSelect: async () => applyHighlight(view, 'yellow')
+        },
+        ...HIGHLIGHT_COLORS.filter((c) => c.id !== 'yellow').map(
+          (c): ContextMenuItem => ({
+            label: `Highlight: ${c.label}`,
+            icon: <HighlightSwatch color={c.id} />,
+            onSelect: async () => applyHighlight(view, c.id)
+          })
+        ),
+        {
+          label: 'Remove highlight',
+          onSelect: async () => applyHighlight(view, 'remove')
+        },
+        { kind: 'separator' }
+      ]
+    : []
 
   const copy = async (): Promise<void> => {
     const sel = view.state.selection.main
@@ -3531,6 +3647,7 @@ function buildEditorContextItems(
       }
     },
     { kind: 'separator' },
+    ...highlightItems,
     { label: 'Cut', hint: formatKeyToken('Mod+X'), disabled: !hasSelection, onSelect: cut },
     { label: 'Copy', hint: formatKeyToken('Mod+C'), disabled: !hasSelection, onSelect: copy },
     { label: 'Paste', hint: formatKeyToken('Mod+V'), onSelect: paste },
@@ -3733,9 +3850,20 @@ function Breadcrumb({
 
   useEffect(() => setValue(note.title), [note.title])
   useEffect(() => setWarning(''), [note.path])
+  // Switching to a different note never inherits a previous note's open rename
+  // field. Listed before the autoFocus latch so a freshly created note (path +
+  // autoFocus change together) ends up editing.
   useEffect(() => {
-    setEditing(autoFocus)
-  }, [autoFocus, note.path])
+    setEditing(false)
+  }, [note.path])
+  // Enter title-edit mode when a freshly created note requests it (#214).
+  // Entering is a one-way latch: when `onAutoFocusHandled` clears the pending
+  // flag (autoFocus → false) we must NOT drop out of editing, or the focused
+  // input would unmount mid-create and focus would fall back to the body. Only
+  // Enter/Escape/blur or a note switch leaves edit mode.
+  useEffect(() => {
+    if (autoFocus) setEditing(true)
+  }, [autoFocus])
   useEffect(() => {
     if (!editingNow) return
     const raf = requestAnimationFrame(() => {
@@ -3744,7 +3872,7 @@ function Breadcrumb({
       if (autoFocus) onAutoFocusHandled()
     })
     return () => cancelAnimationFrame(raf)
-  }, [autoFocus, editingNow, onAutoFocusHandled])
+  }, [autoFocus, editingNow, onAutoFocusHandled, note.path])
 
   const topFolder = note.folder
   const segments = noteFolderSubpath(note, vaultSettings)
@@ -3849,6 +3977,7 @@ function Breadcrumb({
       {editingNow ? (
         <input
           ref={inputRef}
+          data-note-title-input=""
           spellCheck={false}
           value={value}
           placeholder="Untitled"
