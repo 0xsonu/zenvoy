@@ -706,6 +706,7 @@ impl Vault {
         let tags = parse::extract_tags(&body);
         let wikilinks = parse::extract_wikilinks(&body);
         let has_attachments = parse::body_has_local_asset(&body);
+        let asset_embeds = parse::extract_asset_embeds(&body);
         let excerpt = parse::build_excerpt(&body);
         let size = fs_meta.len() as i64;
 
@@ -746,6 +747,7 @@ impl Vault {
             wikilinks,
             has_attachments,
             excerpt,
+            asset_embeds,
         };
 
         {
