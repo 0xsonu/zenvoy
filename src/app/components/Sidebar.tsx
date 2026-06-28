@@ -2212,6 +2212,42 @@ export function Sidebar(): JSX.Element {
         },
       });
     }
+    // Manual reorder options
+    if (noteSortOrder === 'manual') {
+      items.push({ type: 'separator' } as any)
+      items.push({
+        label: 'Move Up',
+        onSelect: () => {
+          const dir = parentDirOf(n.path)
+          const order = manualNoteOrder[dir]
+          const siblings = notes
+            .filter((note) => parentDirOf(note.path) === dir)
+            .sort((a, b) =>
+              manualOrderCompare(order, a.path, a.siblingOrder, b.path, b.siblingOrder)
+            )
+          const idx = siblings.findIndex((s) => s.path === n.path)
+          if (idx > 0) {
+            useStore.getState().reorderNoteManually(n.path, siblings[idx - 1].path, 'before')
+          }
+        },
+      })
+      items.push({
+        label: 'Move Down',
+        onSelect: () => {
+          const dir = parentDirOf(n.path)
+          const order = manualNoteOrder[dir]
+          const siblings = notes
+            .filter((note) => parentDirOf(note.path) === dir)
+            .sort((a, b) =>
+              manualOrderCompare(order, a.path, a.siblingOrder, b.path, b.siblingOrder)
+            )
+          const idx = siblings.findIndex((s) => s.path === n.path)
+          if (idx < siblings.length - 1) {
+            useStore.getState().reorderNoteManually(n.path, siblings[idx + 1].path, 'after')
+          }
+        },
+      })
+    }
     return items;
   }, [
     noteMenu,
@@ -4629,7 +4665,9 @@ const NoteLeaf = memo(function NoteLeaf({
   const [dropPos, setDropPos] = useState<"before" | "after" | null>(null);
   const handleReorderDragOver = useCallback(
     (event: React.DragEvent<HTMLButtonElement>) => {
-      if (!manualSort || !hasZenItem(event)) return;
+      if (!manualSort || !hasZenItem(event)) {
+        return;
+      }
       const drag = getCurrentDragPayload();
       // Same-folder note drops reorder here; everything else bubbles to the
       // folder's move handler (so cross-folder moves still work).

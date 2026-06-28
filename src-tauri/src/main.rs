@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::{DragDropEvent, Emitter};
 use zenvoy_lib::commands::{self, TauriAppState};
 
 fn main() {
@@ -15,6 +16,17 @@ fn main() {
             commands::restore_last_vault(app.handle());
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+                if !paths.is_empty() {
+                    let path_strings: Vec<String> = paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect();
+                    let _ = window.emit("file-drop", path_strings);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::platform,
             commands::list_system_fonts,
@@ -23,6 +35,7 @@ fn main() {
             commands::list_local_vaults,
             commands::open_local_vault,
             commands::close_vault,
+            commands::open_vault_window,
             commands::pick_vault,
             commands::select_vault_path,
             commands::browse_server_directories,

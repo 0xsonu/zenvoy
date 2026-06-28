@@ -1012,6 +1012,21 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
     return () => window.removeEventListener(ZEN_SET_PANE_MODE_EVENT, handler)
   }, [applyPaneMode, isActive])
 
+  // Insert markdown at cursor position (used by file-drop import)
+  useEffect(() => {
+    if (!isActive) return
+    const handler = (event: Event): void => {
+      const markdown = (event as CustomEvent<string>).detail
+      if (!markdown) return
+      const view = viewRef.current
+      if (!view) return
+      const pos = view.state.selection.main.head
+      view.dispatch({ changes: { from: pos, insert: markdown } })
+    }
+    window.addEventListener('zenvoy:insert-at-cursor', handler)
+    return () => window.removeEventListener('zenvoy:insert-at-cursor', handler)
+  }, [isActive])
+
   const lockOutlinePreviewSync = useCallback((durationMs = OUTLINE_JUMP_SCROLL_SYNC_LOCK_MS): void => {
     // Outline jumps target a rendered heading; ratio sync can otherwise override them.
     outlinePreviewSyncLockUntilRef.current = nextOutlinePreviewSyncLockUntil(
@@ -2243,18 +2258,13 @@ export function EditorPane({ pane }: { pane: PaneLeaf }): JSX.Element {
         return
       }
       const fileDrop = hasDroppedFiles(e.dataTransfer)
-      const sourcePaths = droppedPathsFromTransfer(e.dataTransfer)
       setAssetDropActive(false)
       setImageDropIndicatorTop(null)
-      if (fileDrop) e.preventDefault()
-      if (sourcePaths.length === 0) {
-        if (fileDrop) {
-          window.alert('Could not read the dropped file path. Restart the app and try again.')
-        }
+      if (fileDrop) {
+        e.preventDefault()
+        // File drops are handled by the Rust window event handler
         return
       }
-      e.stopPropagation()
-      void importDroppedFiles(sourcePaths, { x: e.clientX, y: e.clientY })
     },
     [
       computePaneEdge,

@@ -175,6 +175,9 @@ pub fn get_current_vault(state: State<'_, TauriAppState>) -> Option<VaultInfo> {
 #[tauri::command]
 pub fn list_local_vaults() -> Vec<LocalVaultEntry> {
     read_local_vaults()
+        .into_iter()
+        .filter(|e| std::path::Path::new(&e.root).is_dir())
+        .collect()
 }
 
 #[tauri::command]
@@ -183,6 +186,9 @@ pub fn open_local_vault(
     state: State<'_, TauriAppState>,
     app: tauri::AppHandle,
 ) -> Result<Option<VaultInfo>, String> {
+    if !std::path::Path::new(&root).is_dir() {
+        return Err(format!("Vault directory not found: {root}"));
+    }
     let info = open_vault_at(&state, &root, &app)?;
     Ok(Some(info))
 }
@@ -191,6 +197,12 @@ pub fn open_local_vault(
 pub fn close_vault(state: State<'_, TauriAppState>) -> Option<VaultInfo> {
     *state.watcher.write() = None;
     *state.vault.write() = None;
+    None
+}
+
+#[tauri::command]
+pub fn open_vault_window() -> Option<VaultInfo> {
+    // Multi-window not yet supported in Tauri build
     None
 }
 
