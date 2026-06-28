@@ -11,6 +11,10 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(TauriAppState::new())
+        .setup(|app| {
+            commands::restore_last_vault(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::platform,
             commands::list_system_fonts,

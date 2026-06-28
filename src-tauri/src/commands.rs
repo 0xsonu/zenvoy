@@ -1,7 +1,7 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{Emitter, State, WebviewWindow, Window};
+use tauri::{Emitter, Manager, State, WebviewWindow, Window};
 use tauri_plugin_updater::UpdaterExt;
 
 use crate::vault::types::*;
@@ -192,6 +192,18 @@ pub fn close_vault(state: State<'_, TauriAppState>) -> Option<VaultInfo> {
     *state.watcher.write() = None;
     *state.vault.write() = None;
     None
+}
+
+/// Called during setup to auto-open the most recently used vault.
+pub fn restore_last_vault(app: &tauri::AppHandle) {
+    let entries = read_local_vaults();
+    if let Some(last) = entries.iter().max_by_key(|e| e.last_opened) {
+        let state = app.state::<TauriAppState>();
+        let root = last.root.clone();
+        if std::path::Path::new(&root).is_dir() {
+            let _ = open_vault_at(&state, &root, app);
+        }
+    }
 }
 
 #[tauri::command]
