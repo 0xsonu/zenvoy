@@ -164,6 +164,7 @@ pub struct NoteMeta {
     pub wikilinks: Vec<String>,
     pub has_attachments: bool,
     pub excerpt: String,
+    pub asset_embeds: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

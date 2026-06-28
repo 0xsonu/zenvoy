@@ -292,35 +292,31 @@ export function createTauriBridge(): ZenBridge {
     // ── Clipboard ────────────────────────────────────────────────────
     clipboardWriteText: (text) => { invoke('clipboard_write_text', { text }) },
     clipboardReadText: () => '',
+    getConfigSync: () => null,
+    setConfig: async () => {},
+    getConfigPath: async () => null,
+    revealConfigFile: async () => {},
+    onConfigChange: () => () => {},
   }
 }
 
-// Install Tauri native drag-drop listener to handle file imports directly
-import('@tauri-apps/api/webview').then(({ getCurrentWebview }) => {
-  getCurrentWebview().onDragDropEvent((event) => {
-    if (event.payload.type === 'enter') {
-      (window as any).__TAURI_DROP_PATHS__ = (event.payload as any).paths || []
-    } else if (event.payload.type === 'drop') {
-      const paths: string[] = (event.payload as any).paths || []
-      if (paths.length === 0) return
-      ;(window as any).__TAURI_DROP_PATHS__ = paths
-      setTimeout(async () => {
-        const store = (window as any).__ZENVOY_STORE__
-        const selectedPath = store?.getState?.()?.selectedPath
-        if (!selectedPath || paths.length === 0) return
-        try {
-          const imported = await invoke<any[]>('import_files_to_note', { notePath: selectedPath, sourcePaths: paths })
-          if (imported && imported.length > 0) {
-            const markdown = imported.map((a: any) => a.markdown).join('\n')
-            window.dispatchEvent(new CustomEvent('zenvoy:insert-at-cursor', { detail: markdown }))
-          }
-          store?.getState?.()?.refreshAssets?.()
-        } catch (err: any) {
-          console.error('[drag-drop] import failed:', err)
-        }
-      }, 0)
-    } else if (event.payload.type === 'leave') {
-      (window as any).__TAURI_DROP_PATHS__ = []
+// File drops handled via Rust on_window_event (DragDrop) which emits 'file-drop'.
+import('@tauri-apps/api/event').then(({ listen }) => {
+  listen<string[]>('file-drop', async (event) => {
+    const paths = event.payload
+    if (!paths || paths.length === 0) return
+    const store = (window as any).__ZENVOY_STORE__
+    const selectedPath = store?.getState?.()?.selectedPath
+    if (!selectedPath) return
+    try {
+      const imported = await invoke<any[]>('import_files_to_note', { notePath: selectedPath, sourcePaths: paths })
+      if (imported && imported.length > 0) {
+        await store?.getState?.()?.refreshAssets?.()
+        const markdown = '\n' + imported.map((a: any) => a.markdown).join('\n') + '\n'
+        window.dispatchEvent(new CustomEvent('zenvoy:insert-at-cursor', { detail: markdown }))
+      }
+    } catch (err: any) {
+      console.error('[file-drop] import failed:', err)
     }
   })
 }).catch(() => {})

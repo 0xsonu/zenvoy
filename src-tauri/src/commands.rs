@@ -175,6 +175,9 @@ pub fn get_current_vault(state: State<'_, TauriAppState>) -> Option<VaultInfo> {
 #[tauri::command]
 pub fn list_local_vaults() -> Vec<LocalVaultEntry> {
     read_local_vaults()
+        .into_iter()
+        .filter(|e| std::path::Path::new(&e.root).is_dir())
+        .collect()
 }
 
 #[tauri::command]
@@ -183,6 +186,9 @@ pub fn open_local_vault(
     state: State<'_, TauriAppState>,
     app: tauri::AppHandle,
 ) -> Result<Option<VaultInfo>, String> {
+    if !std::path::Path::new(&root).is_dir() {
+        return Err(format!("Vault directory not found: {root}"));
+    }
     let info = open_vault_at(&state, &root, &app)?;
     Ok(Some(info))
 }
@@ -194,6 +200,12 @@ pub fn close_vault(state: State<'_, TauriAppState>) -> Option<VaultInfo> {
     None
 }
 
+#[tauri::command]
+pub fn open_vault_window() -> Option<VaultInfo> {
+    // Multi-window not yet supported in Tauri build
+    None
+}
+
 /// Called during setup to auto-open the most recently used vault.
 pub fn restore_last_vault(app: &tauri::AppHandle) {
     let entries = read_local_vaults();
@@ -201,7 +213,25 @@ pub fn restore_last_vault(app: &tauri::AppHandle) {
         let state = app.state::<TauriAppState>();
         let root = last.root.clone();
         if std::path::Path::new(&root).is_dir() {
-            let _ = open_vault_at(&state, &root, app);
+            if let Ok(v) = Vault::new(&root, VaultOptions::default()) {
+                *state.vault.write() = Some(Arc::new(v));
+                // Defer watcher start until async runtime is available
+                let app_handle = app.clone();
+                let watcher_root = root.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Ok(watcher) = VaultWatcher::start(&watcher_root) {
+                        let mut rx = watcher.subscribe();
+                        let emitter = app_handle.clone();
+                        tokio::spawn(async move {
+                            while let Ok(event) = rx.recv().await {
+                                let _ = emitter.emit("vault-change", &event);
+                            }
+                        });
+                        let st = app_handle.state::<TauriAppState>();
+                        *st.watcher.write() = Some(Arc::new(watcher));
+                    }
+                });
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ import { useStore } from '../store'
 import { isPrimaryNotesAtRoot, noteFolderSubpath } from './vault-layout'
 import { resolveWikilinkTarget } from './wikilinks'
 import { parseOutline } from './outline'
+import { listDatabaseLinkTargets, type DatabaseLinkTarget } from './database-links'
 
 function normalize(value: string): string {
   return value.trim().toLowerCase()
@@ -201,6 +202,55 @@ function scoreNote(note: NoteMeta, query: string, activePath: string | null): nu
   return score
 }
 
+function matchesDatabase(db: DatabaseLinkTarget, query: string): boolean {
+  const q = normalize(query)
+  if (!q) return true
+
+  const title = normalize(db.title)
+  const compactTitle = compact(db.title)
+  const compactQuery = compact(query)
+
+  if (title.includes(q)) return true
+  if (compactQuery && compactTitle.includes(compactQuery)) return true
+
+  const tokens = queryTokens(query)
+  if (tokens.length > 1) {
+    const titleWords = title.split(/[\s/_-]+/).filter(Boolean)
+    return tokens.every((token) => titleWords.some((word) => word.startsWith(token)))
+  }
+
+  return compactQuery.length >= 2 && initials(db.title).startsWith(compactQuery)
+}
+
+function scoreDatabase(db: DatabaseLinkTarget, query: string): number {
+  const title = normalize(db.title)
+  const q = normalize(query)
+  // Base 2: tie-break just after same-strength notes, ahead of generic assets.
+  let score = 2
+
+  if (q) {
+    if (title === q) score -= 116
+    else if (title.startsWith(q)) score -= 86
+    else if (title.split(/[\s/_-]+/).some((word) => word.startsWith(q))) score -= 74
+    else if (title.includes(q)) score -= 58
+    else {
+      const compactQuery = compact(query)
+      const compactTitle = compact(db.title)
+      if (compactQuery && compactTitle.includes(compactQuery)) score -= 40
+      else if (compactQuery.length >= 2 && initials(db.title).startsWith(compactQuery)) score -= 15
+      else score += 200
+    }
+  }
+
+  return score
+}
+
+/** `DATABASE` plus the parent folder, e.g. `DATABASE work/` (strips `/<Name>.base/data.csv`). */
+function databaseSubtitle(db: DatabaseLinkTarget): string {
+  const parent = db.csvPath.split('/').slice(0, -2).join('/')
+  return parent ? `DATABASE ${parent}/` : 'DATABASE'
+}
+
 function wikilinkMatch(context: CompletionContext): {
   openFrom: number
   from: number
@@ -257,12 +307,27 @@ export function wikilinkSource(context: CompletionContext): CompletionResult | n
       score: scoreAsset(asset, match.query, activePath)
     }))
 
-  const ranked = [...rankedNotes, ...rankedAssets]
+  // CSV "databases" (`.base` folders) are linkable too — they live in the
+  // folder list, not `notes`/`assetFiles`, so they need their own pass. (#238)
+  const rankedDatabases = listDatabaseLinkTargets(state.folders, state.vaultSettings)
+    .filter((db) => matchesDatabase(db, match.query))
+    .map((db) => ({
+      kind: 'database' as const,
+      db,
+      score: scoreDatabase(db, match.query)
+    }))
+
+  type RankedCandidate =
+    | { kind: 'note'; note: NoteMeta; score: number }
+    | { kind: 'asset'; asset: AssetMeta; score: number }
+    | { kind: 'database'; db: DatabaseLinkTarget; score: number }
+  const labelOf = (c: RankedCandidate): string =>
+    c.kind === 'note' ? c.note.title : c.kind === 'asset' ? c.asset.name : c.db.title
+
+  const ranked: RankedCandidate[] = [...rankedNotes, ...rankedAssets, ...rankedDatabases]
     .sort((a, b) => {
       if (a.score !== b.score) return a.score - b.score
-      const aLabel = a.kind === 'note' ? a.note.title : a.asset.name
-      const bLabel = b.kind === 'note' ? b.note.title : b.asset.name
-      return aLabel.localeCompare(bLabel)
+      return labelOf(a).localeCompare(labelOf(b))
     })
     .slice(0, 24)
 
@@ -291,6 +356,27 @@ export function wikilinkSource(context: CompletionContext): CompletionResult | n
             selection: {
               anchor: from + target.length + (existingClose ? 0 : 2) + (addBangPrefix ? 1 : 0)
             }
+          })
+        }
+      } as WikilinkCompletion
+    }
+
+    if (candidate.kind === 'database') {
+      const target = candidate.db.title
+      const subtitle = databaseSubtitle(candidate.db)
+      return {
+        label: candidate.db.title,
+        detail: subtitle,
+        type: 'class',
+        _kind: 'wikilink',
+        _target: target,
+        _subtitle: subtitle,
+        apply: (view: EditorView, _completion: Completion, from: number, to: number) => {
+          const existingClose = view.state.doc.sliceString(to, to + 2) === ']]'
+          const insert = `${target}${existingClose ? '' : ']]'}`
+          view.dispatch({
+            changes: { from, to, insert },
+            selection: { anchor: from + target.length + (existingClose ? 0 : 2) }
           })
         }
       } as WikilinkCompletion

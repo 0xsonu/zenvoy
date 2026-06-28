@@ -1,5 +1,23 @@
 import { useStore } from '../store'
 import { parseOutline } from './outline'
+import { listDatabaseLinkTargets, resolveDatabaseWikilink } from './database-links'
+
+/**
+ * If `target` names a `.base` database, open its grid and return true; otherwise
+ * return false so the caller can fall back to note resolution / link creation.
+ * Shared by every wikilink click surface (live preview, Cmd-click, preview pane)
+ * so `[[mydatabase]]` works everywhere. (#238)
+ */
+export function openDatabaseFromWikilink(target: string): boolean {
+  const s = useStore.getState()
+  const db = resolveDatabaseWikilink(
+    listDatabaseLinkTargets(s.folders, s.vaultSettings),
+    target
+  )
+  if (!db) return false
+  void s.openDatabase(db.csvPath)
+  return true
+}
 
 /**
  * Open `path` and scroll to the heading matching `headingAnchor`

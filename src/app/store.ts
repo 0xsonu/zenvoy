@@ -35,6 +35,7 @@ import {
 } from '@shared/databases'
 import { parseFrontmatter } from '@shared/template-files'
 import { recordTitle, composePageBody } from './lib/database-cells'
+import { applyManualMove, manualOrderCompare, parentDirOf } from './lib/manual-order'
 import { TAGS_TAB_PATH, isTagsTabPath } from '@shared/tags'
 import { HELP_TAB_PATH, isHelpTabPath } from '@shared/help'
 import { ARCHIVE_TAB_PATH, isArchiveTabPath } from '@shared/archive'
@@ -46,6 +47,7 @@ import {
   FENCE_RE,
   TASK_LINE_RE,
   extractUncheckedTaskBlocks,
+  moveTaskLine,
   removeTaskAtIndex,
   takeTaskLineAtIndex,
   setTaskCheckedAtIndex,
@@ -70,6 +72,12 @@ import {
 import type { KeymapId, KeymapOverrides } from './lib/keymaps'
 import { normalizeKeymapOverrides } from './lib/keymaps'
 import {
+  PORTABLE_PREF_KEYS,
+  pickPortablePrefs,
+  type AppConfigPortable
+} from '@shared/app-config'
+import {
+  type LabelKey,
   type SystemFolderLabels,
   normalizeSystemFolderLabels
 } from './lib/system-folder-labels'
@@ -141,6 +149,7 @@ import {
 
 export type NoteSortOrder =
   | 'none'
+  | 'manual'
   | 'updated-desc'
   | 'updated-asc'
   | 'created-desc'
@@ -149,6 +158,11 @@ export type NoteSortOrder =
   | 'name-desc'
 
 export type LineNumberMode = 'off' | 'absolute' | 'relative'
+
+/** Where the line-number gutter sits when content is centered: glued to the
+ *  left of the text column ('text', default) or pinned to the editor's far-left
+ *  edge ('edge'). No visible effect when content is left-aligned. (#228) */
+export type LineNumberPosition = 'edge' | 'text'
 export type WhichKeyHintMode = 'timed' | 'sticky'
 export type CommandPaletteInitialMode = 'main' | 'vault'
 
@@ -162,11 +176,14 @@ const VALID_FAMILIES: ThemeFamily[] = [
   'solarized',
   'one',
   'nord',
-  'tokyo-night'
+  'tokyo-night',
+  'kanagawa',
+  'black-metal'
 ]
 const VALID_MODES: ThemeMode[] = ['light', 'dark', 'auto']
 const VALID_SORTS: NoteSortOrder[] = [
   'none',
+  'manual',
   'updated-desc',
   'updated-asc',
   'created-desc',
@@ -175,6 +192,7 @@ const VALID_SORTS: NoteSortOrder[] = [
   'name-desc'
 ]
 const VALID_LINE_NUMBER_MODES: LineNumberMode[] = ['off', 'absolute', 'relative']
+const VALID_LINE_NUMBER_POSITIONS: LineNumberPosition[] = ['edge', 'text']
 const VALID_WHICH_KEY_HINT_MODES: WhichKeyHintMode[] = ['timed', 'sticky']
 const VALID_VAULT_TEXT_SEARCH_BACKENDS: VaultTextSearchBackendPreference[] = [
   'auto',
@@ -185,7 +203,11 @@ const VALID_VAULT_TEXT_SEARCH_BACKENDS: VaultTextSearchBackendPreference[] = [
 const MAX_NOTE_JUMP_HISTORY = 100
 const DEFAULT_SIDEBAR_WIDTH = 336
 const LEGACY_DEFAULT_SIDEBAR_WIDTHS = new Set([232, 260, 288])
-const LIST_NOTES_BRIDGE_PAGE_SIZE = 250
+// Matches the desktop main process's own default/preferred stream chunk size
+// (capped at 1000 there). 500 halves the number of boot-time IPC round-trips
+// and inter-page yields for large vaults versus the old 250, while keeping each
+// page small enough to stay responsive. Identical note set, fewer trips.
+const LIST_NOTES_BRIDGE_PAGE_SIZE = 500
 
 function nextRendererTask(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0))
@@ -212,6 +234,34 @@ async function listNotesFromBridge(): Promise<NoteMeta[]> {
     offset = page.nextOffset
     await nextRendererTask()
   }
+}
+
+// Coalesce full note-list refreshes triggered by vault-change (watcher) events.
+// A bulk external change — git pull, cloud sync, bulk move/import — fires one
+// watcher event per file; routing each straight to refreshNotes() would re-walk
+// the entire vault N times. This collapses a burst into a single in-flight
+// refresh plus at most one trailing refresh, so the *final* state is identical
+// (refreshNotes is idempotent) but the vault is listed once or twice, not N
+// times. Isolated changes still refresh immediately with no added latency.
+let coalescedNotesRefreshInFlight: Promise<void> | null = null
+let coalescedNotesRefreshPending = false
+
+function refreshNotesCoalesced(): Promise<void> {
+  if (coalescedNotesRefreshInFlight) {
+    coalescedNotesRefreshPending = true
+    return coalescedNotesRefreshInFlight
+  }
+  coalescedNotesRefreshInFlight = (async () => {
+    try {
+      do {
+        coalescedNotesRefreshPending = false
+        await useStore.getState().refreshNotes()
+      } while (coalescedNotesRefreshPending)
+    } finally {
+      coalescedNotesRefreshInFlight = null
+    }
+  })()
+  return coalescedNotesRefreshInFlight
 }
 
 async function refreshVaultIndexes(): Promise<void> {
@@ -303,6 +353,9 @@ interface Prefs {
   /** Optional explicit binary path for fzf. Blank uses PATH lookup. */
   fzfBinaryPath: string | null
   livePreview: boolean      // hide markdown syntax on inactive lines
+  /** Render Markdown tables as interactive WYSIWYG widgets in live preview.
+   *  Off keeps tables as plain editable markdown — full keyboard/Vim editing. */
+  renderTablesInLivePreview: boolean
   /** Auto-close markdown delimiters while typing: `**`+Space → `**|**`,
    *  ```` ``` ````+Enter expands a fenced block. Off restores plain typing. */
   markdownSnippets: boolean
@@ -316,6 +369,7 @@ interface Prefs {
   editorLineHeight: number  // unitless multiplier
   previewMaxWidth: number   // px — max reading width for preview surfaces
   lineNumberMode: LineNumberMode
+  lineNumberPosition: LineNumberPosition
   /** Font used by the whole app chrome (sidebar, menus, title bar). */
   interfaceFont: string | null
   /** Font used inside the editor + preview content. */
@@ -402,6 +456,9 @@ interface Prefs {
 
 export type TasksViewMode = 'list' | 'calendar' | 'kanban'
 export type KanbanGroupBy = 'status' | 'priority' | 'folder'
+/** How the Tags view combines multiple selected tags: `all` = intersection
+ *  (AND, narrows), `any` = union (OR, widens). */
+export type TagMatchMode = 'all' | 'any'
 
 export type TaskMutation =
   | { kind: 'set-checked'; checked: boolean }
@@ -436,7 +493,7 @@ function normalizeKanbanColumnTitles(raw: unknown): Record<string, string> {
   return out
 }
 
-const DEFAULT_PREFS: Prefs = {
+export const DEFAULT_PREFS: Prefs = {
   vimMode: true,
   vimInsertEscape: '',
   vimYankToClipboard: false,
@@ -448,6 +505,7 @@ const DEFAULT_PREFS: Prefs = {
   ripgrepBinaryPath: null,
   fzfBinaryPath: null,
   livePreview: true,
+  renderTablesInLivePreview: true,
   markdownSnippets: true,
   hideBuiltinTemplates: false,
   tabsEnabled: true,
@@ -459,6 +517,7 @@ const DEFAULT_PREFS: Prefs = {
   editorLineHeight: 1.7,
   previewMaxWidth: 920,
   lineNumberMode: 'off',
+  lineNumberPosition: 'text',
   // Leave all font slots on the built-in "Default" path. That lets the
   // shipped CSS fallbacks choose sensible system fonts on each machine
   // instead of forcing a specific family that may not exist.
@@ -551,6 +610,10 @@ function normalizePrefs(p: Partial<Prefs>): Prefs {
         : DEFAULT_PREFS.fzfBinaryPath,
     livePreview:
       typeof p.livePreview === 'boolean' ? p.livePreview : DEFAULT_PREFS.livePreview,
+    renderTablesInLivePreview:
+      typeof p.renderTablesInLivePreview === 'boolean'
+        ? p.renderTablesInLivePreview
+        : DEFAULT_PREFS.renderTablesInLivePreview,
     markdownSnippets:
       typeof p.markdownSnippets === 'boolean'
         ? p.markdownSnippets
@@ -582,6 +645,10 @@ function normalizePrefs(p: Partial<Prefs>): Prefs {
       p.lineNumberMode && VALID_LINE_NUMBER_MODES.includes(p.lineNumberMode)
         ? p.lineNumberMode
         : DEFAULT_PREFS.lineNumberMode,
+    lineNumberPosition:
+      p.lineNumberPosition && VALID_LINE_NUMBER_POSITIONS.includes(p.lineNumberPosition)
+        ? p.lineNumberPosition
+        : DEFAULT_PREFS.lineNumberPosition,
     interfaceFont:
       typeof p.interfaceFont === 'string' || p.interfaceFont === null
         ? (p.interfaceFont as string | null)
@@ -718,31 +785,106 @@ function normalizePrefs(p: Partial<Prefs>): Prefs {
         : DEFAULT_PREFS.hasCompletedOnboarding
   }
 }
+// --- Portable config file integration (desktop) -----------------------------
+// On desktop, the portable subset of prefs is mirrored to a plain-text
+// config.toml (issue #203) so it can be synced across machines. The file is
+// the source of truth for portable keys; localStorage stays as a fast cache
+// and the web fallback. `getConfigSync()` returns null on web (and when the
+// bridge is absent, e.g. tests) — we then behave exactly as before.
+let cachedInitialPrefs: Prefs | null = null
+// True when a config file is available on this platform (desktop). Gates
+// whether savePrefs mirrors changes out to the file.
+let configFileEnabled = false
+// True when the config file already had content at load — i.e. this isn't a
+// first run, so we must NOT clobber it by seeding from localStorage.
+let configFileHadContent = false
+
+function readConfigFromBridge(): AppConfigPortable | null {
+  try {
+    const bridge = typeof window !== 'undefined' ? window.zen : undefined
+    if (!bridge || typeof bridge.getConfigSync !== 'function') return null
+    return bridge.getConfigSync()
+  } catch {
+    return null
+  }
+}
+
 function loadPrefs(): Prefs {
+  if (cachedInitialPrefs) return cachedInitialPrefs
+
+  let base: Partial<Prefs> = {}
+  let hadLocalStorage = false
   try {
     const raw = localStorage.getItem(PREFS_KEY)
     if (raw) {
-      const parsed = JSON.parse(raw) as Partial<Prefs>
-      const normalized = normalizePrefs(parsed)
-      // Users upgrading from a version that didn't have the onboarding flag
-      // shouldn't be greeted with the wizard on next launch — treat the
-      // presence of an existing prefs blob as evidence they've been here.
-      if (typeof parsed.hasCompletedOnboarding !== 'boolean') {
-        normalized.hasCompletedOnboarding = true
-      }
-      return normalized
+      base = JSON.parse(raw) as Partial<Prefs>
+      hadLocalStorage = true
     }
   } catch {
     /* ignore */
   }
-  return DEFAULT_PREFS
+
+  const fileConfig = readConfigFromBridge()
+  configFileEnabled = fileConfig !== null
+  configFileHadContent = !!fileConfig && Object.keys(fileConfig).length > 0
+
+  // The file wins for portable keys; localStorage supplies machine-local keys.
+  const merged: Partial<Prefs> = configFileHadContent
+    ? { ...base, ...(fileConfig as Partial<Prefs>) }
+    : base
+
+  const normalized = normalizePrefs(merged)
+
+  // Don't greet returning users with the onboarding wizard: an existing prefs
+  // blob or a populated config file both mean they've been here before.
+  if (
+    (hadLocalStorage && typeof base.hasCompletedOnboarding !== 'boolean') ||
+    configFileHadContent
+  ) {
+    normalized.hasCompletedOnboarding = true
+  }
+
+  // When the config file is authoritative, refresh the localStorage cache so
+  // other same-origin renderers (e.g. the quick-capture window) and the next
+  // launch see the synced values immediately.
+  if (configFileHadContent) {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(normalized))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  cachedInitialPrefs = hadLocalStorage || configFileHadContent ? normalized : DEFAULT_PREFS
+  return cachedInitialPrefs
 }
+
+let configPushTimer: ReturnType<typeof setTimeout> | null = null
+const CONFIG_PUSH_DEBOUNCE_MS = 400
+
+function pushPortableConfig(p: Prefs): void {
+  if (!configFileEnabled) return
+  const bridge = typeof window !== 'undefined' ? window.zen : undefined
+  if (!bridge || typeof bridge.setConfig !== 'function') return
+  if (configPushTimer) clearTimeout(configPushTimer)
+  configPushTimer = setTimeout(() => {
+    configPushTimer = null
+    try {
+      void bridge.setConfig(pickPortablePrefs(p as unknown as Record<string, unknown>))
+    } catch {
+      /* ignore */
+    }
+  }, CONFIG_PUSH_DEBOUNCE_MS)
+}
+
 function savePrefs(p: Prefs): void {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(p))
   } catch {
     /* ignore */
   }
+  cachedInitialPrefs = p
+  pushPortableConfig(p)
 }
 
 function replaceNoteMeta(notes: NoteMeta[], oldPath: string, next: NoteMeta): NoteMeta[] {
@@ -973,6 +1115,67 @@ function writeRolloverMarker(root: string, iso: string): void {
   }
 }
 
+// Per-vault "the user dismissed the inbox-mode/vault-root notice" marker (#216).
+// Some vaults intentionally keep extra material at the root (e.g. AI tooling),
+// so once dismissed the banner stays hidden for that vault. Keyed by root.
+function rootBannerDismissKey(root: string): string {
+  return `zen.sidebar.rootBannerDismissed.${root || 'default'}`
+}
+function readRootBannerDismissed(root: string): boolean {
+  try {
+    return (
+      typeof localStorage !== 'undefined' &&
+      localStorage.getItem(rootBannerDismissKey(root)) === '1'
+    )
+  } catch {
+    return false
+  }
+}
+function writeRootBannerDismissed(root: string): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(rootBannerDismissKey(root), '1')
+    }
+  } catch {
+    // localStorage may be unavailable; the banner just reappears next session.
+  }
+}
+
+// Per-vault manual note order (#224): `parentDir -> ordered note paths`. Stored
+// in localStorage keyed by vault root, like the rollover marker. Not a vault
+// sidecar yet, so it's per-machine — a portable `.zenvoy` file is a follow-up.
+type ManualNoteOrder = Record<string, string[]>
+function manualOrderKey(root: string): string {
+  return `zen.notes.manualOrder.${root || 'default'}`
+}
+function readManualOrder(root: string): ManualNoteOrder {
+  try {
+    const raw =
+      typeof localStorage !== 'undefined' ? localStorage.getItem(manualOrderKey(root)) : null
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    const out: ManualNoteOrder = {}
+    for (const [dir, list] of Object.entries(parsed as Record<string, unknown>)) {
+      if (Array.isArray(list)) out[dir] = list.filter((p): p is string => typeof p === 'string')
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+function writeManualOrder(root: string, order: ManualNoteOrder): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(manualOrderKey(root), JSON.stringify(order))
+    }
+  } catch {
+    // localStorage may be unavailable; the manual order is best-effort.
+  }
+}
+// Which vault root the in-memory manual order was loaded for; reloaded on switch.
+let manualOrderLoadedForRoot: string | null = null
+
 function applyTaskMutationsToTask(task: VaultTask, mutations: TaskMutation[]): VaultTask {
   let next = task
   for (const m of mutations) {
@@ -1145,6 +1348,7 @@ function collectPrefs(s: {
   ripgrepBinaryPath: string | null
   fzfBinaryPath: string | null
   livePreview: boolean
+  renderTablesInLivePreview: boolean
   markdownSnippets: boolean
   hideBuiltinTemplates: boolean
   tabsEnabled: boolean
@@ -1156,6 +1360,7 @@ function collectPrefs(s: {
   editorLineHeight: number
   previewMaxWidth: number
   lineNumberMode: LineNumberMode
+  lineNumberPosition: LineNumberPosition
   interfaceFont: string | null
   textFont: string | null
   monoFont: string | null
@@ -1204,6 +1409,7 @@ function collectPrefs(s: {
     ripgrepBinaryPath: s.ripgrepBinaryPath,
     fzfBinaryPath: s.fzfBinaryPath,
     livePreview: s.livePreview,
+    renderTablesInLivePreview: s.renderTablesInLivePreview,
     markdownSnippets: s.markdownSnippets,
     hideBuiltinTemplates: s.hideBuiltinTemplates,
     tabsEnabled: s.tabsEnabled,
@@ -1215,6 +1421,7 @@ function collectPrefs(s: {
     editorLineHeight: s.editorLineHeight,
     previewMaxWidth: s.previewMaxWidth,
     lineNumberMode: s.lineNumberMode,
+    lineNumberPosition: s.lineNumberPosition,
     interfaceFont: s.interfaceFont,
     textFont: s.textFont,
     monoFont: s.monoFont,
@@ -1519,6 +1726,8 @@ interface Store {
   vaultSettings: VaultSettings
   /** Vault is in `inbox` mode but its root holds notes only `root` mode shows. */
   rootContentHiddenByInboxMode: boolean
+  /** The user dismissed the vault-root notice for the current vault (#216). */
+  rootContentBannerDismissed: boolean
   notes: NoteMeta[]
   folders: FolderEntry[]
   assetFiles: AssetMeta[]
@@ -1568,6 +1777,7 @@ interface Store {
   ripgrepBinaryPath: string | null
   fzfBinaryPath: string | null
   livePreview: boolean
+  renderTablesInLivePreview: boolean
   /** Auto-close markdown delimiters while typing. Persisted. */
   markdownSnippets: boolean
   hideBuiltinTemplates: boolean
@@ -1581,6 +1791,7 @@ interface Store {
   editorLineHeight: number
   previewMaxWidth: number
   lineNumberMode: LineNumberMode
+  lineNumberPosition: LineNumberPosition
   interfaceFont: string | null
   textFont: string | null
   monoFont: string | null
@@ -1593,6 +1804,9 @@ interface Store {
   unifiedSidebar: boolean
   darkSidebar: boolean
   showSidebarChevrons: boolean
+  /** Manual (drag-to-reorder) note order for `noteSortOrder: 'manual'`, keyed
+   *  by parent directory → ordered note paths. Persisted per vault (#224). */
+  manualNoteOrder: ManualNoteOrder
   /** Sidebar tree collapsed-folder keys. Kept in the store so the
    *  state survives Sidebar unmount/mount (e.g. toggling the sidebar). */
   collapsedFolders: string[]
@@ -1677,9 +1891,12 @@ interface Store {
   databasesLoading: Record<string, boolean>
 
   /** Tags currently selected in the Tags view. The view shows every non-
-   *  trash note carrying *any* of these (union), so toggling more tags
-   *  widens the result set. Cleared when the Tags tab closes. */
+   *  trash note carrying *all* (or, in `any` mode, any) of these, depending on
+   *  `tagMatchMode`. Cleared when the Tags tab closes. */
   selectedTags: string[]
+  /** Whether multiple selected tags combine with AND (`all`, the default —
+   *  narrows) or OR (`any` — widens). */
+  tagMatchMode: TagMatchMode
 
   /** Vim navigation: which panel is keyboard-focused. */
   focusedPanel: Panel | null
@@ -1765,6 +1982,8 @@ interface Store {
   toggleTagSelection: (tag: string) => void
   /** Replace the Tags view selection wholesale (used by `:tag a b c`). */
   setSelectedTags: (tags: string[]) => void
+  /** Switch how multiple selected tags combine (AND vs OR). */
+  setTagMatchMode: (mode: TagMatchMode) => void
   /** Force a full vault rescan for tasks. */
   refreshTasks: () => Promise<void>
   /** Rescan a single note's tasks and splice the result into `vaultTasks`. */
@@ -1816,6 +2035,8 @@ interface Store {
   applyChange: (ev: VaultChangeEvent) => Promise<void>
   refreshNotes: () => Promise<void>
   refreshRootContentHidden: () => Promise<void>
+  /** Dismiss the vault-root notice for the current vault, persisted (#216). */
+  dismissRootContentBanner: () => void
   refreshAssets: () => Promise<void>
   deleteAsset: (relPath: string) => Promise<void>
   undoLastAssetAction: () => Promise<boolean>
@@ -1873,6 +2094,7 @@ interface Store {
   setRipgrepBinaryPath: (path: string | null) => void
   setFzfBinaryPath: (path: string | null) => void
   setLivePreview: (on: boolean) => void
+  setRenderTablesInLivePreview: (on: boolean) => void
   setMarkdownSnippets: (on: boolean) => void
   setHideBuiltinTemplates: (hidden: boolean) => void
   setTabsEnabled: (on: boolean) => void
@@ -1883,13 +2105,28 @@ interface Store {
   setEditorLineHeight: (mult: number) => void
   setPreviewMaxWidth: (px: number) => void
   setLineNumberMode: (mode: LineNumberMode) => void
+  setLineNumberPosition: (position: LineNumberPosition) => void
   setInterfaceFont: (family: string | null) => void
   setTextFont: (family: string | null) => void
   setMonoFont: (family: string | null) => void
-  setSystemFolderLabel: (folder: NoteFolder, label: string | null) => void
+  setSystemFolderLabel: (key: LabelKey, label: string | null) => void
   setSidebarWidth: (px: number) => void
   setNoteListWidth: (px: number) => void
   setNoteSortOrder: (order: NoteSortOrder) => void
+  /** Move a note before/after a sibling in its folder's manual order (#224). */
+  reorderNoteManually: (
+    draggedPath: string,
+    targetPath: string,
+    position: 'before' | 'after'
+  ) => void
+  /** Reorder a task by moving its markdown line before/after another task's
+   *  line in the same note (the note's line order is the source of truth).
+   *  No-op across notes. */
+  reorderTaskInNote: (
+    task: VaultTask,
+    targetTask: VaultTask,
+    position: 'before' | 'after'
+  ) => Promise<void>
   setGroupByKind: (on: boolean) => void
   setAutoReveal: (on: boolean) => void
   setUnifiedSidebar: (on: boolean) => void
@@ -2903,6 +3140,8 @@ export const useStore = create<Store>((set, get) => {
   workspaceSetupError: null,
   vaultSettings: DEFAULT_VAULT_SETTINGS,
   rootContentHiddenByInboxMode: false,
+  rootContentBannerDismissed: false,
+  manualNoteOrder: {},
   notes: [],
   folders: [],
   assetFiles: [],
@@ -2944,6 +3183,7 @@ export const useStore = create<Store>((set, get) => {
   ripgrepBinaryPath: loadPrefs().ripgrepBinaryPath,
   fzfBinaryPath: loadPrefs().fzfBinaryPath,
   livePreview: loadPrefs().livePreview,
+  renderTablesInLivePreview: loadPrefs().renderTablesInLivePreview,
   markdownSnippets: loadPrefs().markdownSnippets,
   hideBuiltinTemplates: loadPrefs().hideBuiltinTemplates,
   tabsEnabled: loadPrefs().tabsEnabled,
@@ -2956,6 +3196,7 @@ export const useStore = create<Store>((set, get) => {
   editorLineHeight: loadPrefs().editorLineHeight,
   previewMaxWidth: loadPrefs().previewMaxWidth,
   lineNumberMode: loadPrefs().lineNumberMode,
+  lineNumberPosition: loadPrefs().lineNumberPosition,
   interfaceFont: loadPrefs().interfaceFont,
   textFont: loadPrefs().textFont,
   monoFont: loadPrefs().monoFont,
@@ -3000,6 +3241,7 @@ export const useStore = create<Store>((set, get) => {
   databases: {},
   databasesLoading: {},
   selectedTags: [],
+  tagMatchMode: 'all',
   focusedPanel: null,
   sidebarCursorIndex: 0,
   noteListCursorIndex: 0,
@@ -3068,12 +3310,21 @@ export const useStore = create<Store>((set, get) => {
   refreshRootContentHidden: async () => {
     try {
       const hidden = await window.zen.rootContentHiddenByInboxMode()
-      if (get().rootContentHiddenByInboxMode !== hidden) {
-        set({ rootContentHiddenByInboxMode: hidden })
+      const dismissed = readRootBannerDismissed(get().vault?.root ?? '')
+      const cur = get()
+      if (
+        cur.rootContentHiddenByInboxMode !== hidden ||
+        cur.rootContentBannerDismissed !== dismissed
+      ) {
+        set({ rootContentHiddenByInboxMode: hidden, rootContentBannerDismissed: dismissed })
       }
     } catch {
       // Non-fatal: the banner is advisory; keep the previous value on error.
     }
+  },
+  dismissRootContentBanner: () => {
+    writeRootBannerDismissed(get().vault?.root ?? '')
+    set({ rootContentBannerDismissed: true })
   },
   setNotes: (notes) => set({ notes }),
   setView: (view) => {
@@ -3401,6 +3652,8 @@ export const useStore = create<Store>((set, get) => {
     }
     set({ selectedTags: clean })
   },
+
+  setTagMatchMode: (mode) => set({ tagMatchMode: mode }),
 
   refreshTasks: async () => {
     set({ tasksLoading: true })
@@ -3809,6 +4062,12 @@ export const useStore = create<Store>((set, get) => {
 
   refreshNotes: async () => {
     try {
+      // Load this vault's manual note order once per vault (drives #224).
+      const orderRoot = get().vault?.root ?? ''
+      if (manualOrderLoadedForRoot !== orderRoot) {
+        manualOrderLoadedForRoot = orderRoot
+        set({ manualNoteOrder: readManualOrder(orderRoot) })
+      }
       const startedAt = performance.now()
       const [notes, folders, hasAssetsDirOnDisk] = await Promise.all([
         listNotesFromBridge(),
@@ -3972,7 +4231,7 @@ export const useStore = create<Store>((set, get) => {
       // A folder was created/removed/renamed externally (e.g. in another
       // client sharing this vault). An empty folder produces no note event,
       // so refresh the tree explicitly — refreshNotes() re-lists folders.
-      await get().refreshNotes()
+      await refreshNotesCoalesced()
       return
     }
     // Excalidraw drawings are notes (they live in the notes tree), so treat
@@ -3984,7 +4243,7 @@ export const useStore = create<Store>((set, get) => {
       return
     }
     await Promise.all([
-      get().refreshNotes(),
+      refreshNotesCoalesced(),
       ev.scope === 'vault-settings'
         ? window.zen
             .getVaultSettings()
@@ -4605,6 +4864,10 @@ export const useStore = create<Store>((set, get) => {
     set({ livePreview: on })
     savePrefs(collectPrefs(get()))
   },
+  setRenderTablesInLivePreview: (on) => {
+    set({ renderTablesInLivePreview: on })
+    savePrefs(collectPrefs(get()))
+  },
   setMarkdownSnippets: (on) => {
     set({ markdownSnippets: on })
     savePrefs(collectPrefs(get()))
@@ -4674,6 +4937,10 @@ export const useStore = create<Store>((set, get) => {
     set({ lineNumberMode: mode })
     savePrefs(collectPrefs(get()))
   },
+  setLineNumberPosition: (position) => {
+    set({ lineNumberPosition: position })
+    savePrefs(collectPrefs(get()))
+  },
   setInterfaceFont: (family) => {
     set({ interfaceFont: family })
     savePrefs(collectPrefs(get()))
@@ -4710,6 +4977,64 @@ export const useStore = create<Store>((set, get) => {
   setNoteSortOrder: (order) => {
     set({ noteSortOrder: order })
     savePrefs(collectPrefs(get()))
+  },
+  reorderNoteManually: (draggedPath, targetPath, position) => {
+    const dir = parentDirOf(draggedPath)
+    if (draggedPath === targetPath || parentDirOf(targetPath) !== dir) return
+    const s = get()
+    const existing = s.manualNoteOrder[dir]
+    // Current sibling order (manual if set, else file order), then move.
+    const ordered = s.notes
+      .filter((n) => parentDirOf(n.path) === dir)
+      .slice()
+      .sort((a, b) =>
+        manualOrderCompare(existing, a.path, a.siblingOrder, b.path, b.siblingOrder)
+      )
+      .map((n) => n.path)
+    const next = applyManualMove(ordered, draggedPath, targetPath, position)
+    const nextMap = { ...s.manualNoteOrder, [dir]: next }
+    set({ manualNoteOrder: nextMap })
+    writeManualOrder(s.vault?.root ?? '', nextMap)
+  },
+  reorderTaskInNote: async (task, targetTask, position) => {
+    // Reorder is a within-note line move — tasks in different notes live in
+    // different files, so cross-note moves aren't possible here.
+    if (task.sourcePath !== targetTask.sourcePath || task.taskIndex === targetTask.taskIndex) {
+      return
+    }
+    const path = task.sourcePath
+    const openBuffer = get().noteContents[path]
+    let body: string
+    try {
+      body = openBuffer?.body ?? (await window.zen.readNote(path)).body
+    } catch (err) {
+      console.error('readNote (reorder) failed', err)
+      return
+    }
+    const nextBody = moveTaskLine(body, task.taskIndex, targetTask.taskIndex, position)
+    if (nextBody === body) return
+
+    // Optimistically refresh this note's tasks so the list reorders immediately,
+    // whether the note is open (unsaved buffer) or only on disk.
+    const fresh = parseTasksFromBody(nextBody, {
+      path,
+      title: task.noteTitle,
+      folder: task.noteFolder
+    })
+    set((s) => ({
+      vaultTasks: s.vaultTasks.filter((t) => t.sourcePath !== path).concat(fresh)
+    }))
+
+    if (get().noteContents[path]) {
+      get().updateNoteBody(path, nextBody)
+    } else {
+      try {
+        await window.zen.writeNote(path, nextBody)
+      } catch (err) {
+        console.error('writeNote (reorder) failed', err)
+        void get().rescanTasksForPath(path)
+      }
+    }
   },
   setGroupByKind: (on) => {
     set({ groupByKind: on })
@@ -6744,6 +7069,64 @@ export const useStore = create<Store>((set, get) => {
   }
 })
 
+// --- Portable config file sync (desktop) ------------------------------------
+
+/** Apply an externally-changed portable config (synced dotfile / hand-edit)
+ *  to the live store and the localStorage cache. Uses setState directly so it
+ *  doesn't re-trigger a write back out to the file. */
+function applyPortableConfig(next: AppConfigPortable): void {
+  if (!next || typeof next !== 'object') return
+  const current = collectPrefs(useStore.getState())
+  const merged = normalizePrefs({ ...current, ...(next as Partial<Prefs>) })
+  cachedInitialPrefs = merged
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(merged))
+  } catch {
+    /* ignore */
+  }
+  const patch: Record<string, unknown> = {}
+  const mergedRecord = merged as unknown as Record<string, unknown>
+  for (const key of PORTABLE_PREF_KEYS) {
+    patch[key] = mergedRecord[key]
+  }
+  useStore.setState(patch as Partial<Store>)
+}
+
+let configSyncInitialized = false
+
+/**
+ * Wire up portable-config syncing. Call once on app startup (desktop only —
+ * a no-op on web). Seeds the config file from current prefs on first run so
+ * existing users keep their setup without reconfiguring, then subscribes to
+ * external edits for live reload.
+ */
+export function initConfigSync(): void {
+  if (configSyncInitialized) return
+  const bridge = typeof window !== 'undefined' ? window.zen : undefined
+  if (!bridge || typeof bridge.getConfigSync !== 'function') return
+  if (!configFileEnabled) return
+  configSyncInitialized = true
+
+  // Migration for existing users: no config file yet → create one from their
+  // current preferences so the dotfile starts as an exact mirror of today's
+  // setup, no reconfiguration needed.
+  if (!configFileHadContent && typeof bridge.setConfig === 'function') {
+    try {
+      const prefs = collectPrefs(useStore.getState())
+      void bridge.setConfig(pickPortablePrefs(prefs as unknown as Record<string, unknown>))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (typeof bridge.onConfigChange === 'function') {
+    try {
+      bridge.onConfigChange((nextCfg) => applyPortableConfig(nextCfg))
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 // Expose store for Tauri drag-drop handler
 ;(window as any).__ZENVOY_STORE__ = useStore

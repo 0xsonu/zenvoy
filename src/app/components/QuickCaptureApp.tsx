@@ -31,7 +31,7 @@
  *   :find        — open the note picker (alias for ⌘P).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorState, Prec } from '@codemirror/state'
 import {
   EditorView,
   drawSelection,
@@ -49,6 +49,14 @@ import { appMarkdownSnippetExtension } from '../lib/markdown-snippets-config'
 import { syntaxHighlighting, HighlightStyle, defaultHighlightStyle } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
 import { searchKeymap } from '@codemirror/search'
+import {
+  autocompletion,
+  closeCompletion,
+  completionKeymap,
+  completionStatus
+} from '@codemirror/autocomplete'
+import { completionNavKeymap } from '../lib/cm-completion-nav'
+import { slashCommandRender, templateSlashCommandSource } from '../lib/cm-slash-commands'
 import type { NoteMeta } from '@shared/ipc'
 import {
   DEFAULT_THEME_ID,
@@ -425,8 +433,33 @@ export function QuickCaptureApp(): JSX.Element {
           syntaxHighlighting(captureHighlight),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           placeholder('Start writing…'),
+          // Notion-style `/` slash commands — same block inserters as the main
+          // editor, minus the store-dependent "Page" (no active note here). (#182)
+          autocompletion({
+            override: [templateSlashCommandSource],
+            addToOptions: [{ render: slashCommandRender.render, position: 0 }],
+            icons: false,
+            optionClass: () => 'slash-cmd-option'
+          }),
+          completionNavKeymap,
+          // Esc closes an open slash menu instead of bubbling to the window-level
+          // Esc that saves + hides the capture window. Runs before everything,
+          // and only when a completion is actually open.
+          Prec.highest(
+            EditorView.domEventHandlers({
+              keydown: (event, view) => {
+                if (event.key !== 'Escape') return false
+                if (completionStatus(view.state) !== 'active') return false
+                closeCompletion(view)
+                event.preventDefault()
+                event.stopPropagation()
+                return true
+              }
+            })
+          ),
           keymap.of([
             indentWithTab,
+            ...completionKeymap,
             ...vimAwareDefaultKeymap(prefs.vimMode),
             ...historyKeymap,
             ...searchKeymap

@@ -111,6 +111,32 @@ pub fn body_has_local_asset(body: &str) -> bool {
     false
 }
 
+/// Extract all asset embed references (![[...]] and ![...](...)  local paths).
+pub fn extract_asset_embeds(body: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let stripped = strip_code_content(body);
+    for cap in EMBED_RE.captures_iter(&stripped) {
+        let t = cap[1].trim();
+        if !t.is_empty() {
+            seen.insert(t.to_string());
+        }
+    }
+    for cap in LINK_RE.captures_iter(&stripped) {
+        if &cap[0][..1] != "!" {
+            continue;
+        }
+        let href = cap[2].trim();
+        if href.is_empty() || href.starts_with('#') || href.starts_with("//") {
+            continue;
+        }
+        if SCHEME_RE.is_match(href) {
+            continue;
+        }
+        seen.insert(href.to_string());
+    }
+    seen.into_iter().collect()
+}
+
 pub fn build_excerpt(body: &str) -> String {
     let without_front = if body.starts_with("---\n") {
         FRONTMATTER_RE.replace(body, "").to_string()

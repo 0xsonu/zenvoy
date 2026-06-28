@@ -190,6 +190,11 @@ export const HELP_CORE_CONCEPTS: HelpCard[] = [
       'Select text in the editor and press `Mod+Alt+M` — or open the text menu with `m` — to start a comment, and toggle the Comments panel itself with `Mod+Shift+C`. Zenvoy stores note comments beside the note in vault metadata, then highlights the anchored text and line when the comment is active. In the panel, move with `j` / `k` and use `e` to edit, `r` to resolve, and `d` to delete.'
   },
   {
+    title: 'The home view is where you land',
+    body:
+      'When no note is open (outside Zen mode), Zenvoy shows a light home view instead of a blank pane: a greeting, quick-create actions (new note, database, drawing — plus daily and weekly notes when those are enabled in Settings), your most recently edited notes, and today’s open tasks with an overdue count. Click a note or task to open it, tick a checkbox to complete a task in place, and use ↑/↓ — or j/k in Vim mode — then Enter to move and open from the keyboard.'
+  },
+  {
     title: 'Sessions restore on relaunch',
     body:
       'Workspace restore is saved per vault, while the window frame restore is global. Reopening Zenvoy brings back your pane layout, open buffers, built-in views, and the last window bounds instead of dropping you into a fresh shell.'
@@ -202,7 +207,7 @@ export const HELP_CORE_CONCEPTS: HelpCard[] = [
   {
     title: 'Tasks, tags, archive, and trash are vault-wide views',
     body:
-      'Tasks scans every note for checkboxes, Tags lets you browse notes matching any selected tag, Archive gives you a dedicated list of cold-storage notes, and Trash gives you a recovery surface for deleted notes without turning the left rail into a second browser.'
+      'Tasks scans every note for checkboxes, Tags lets you browse notes that carry all of the selected tags (toggle Match to Any for a union), Archive gives you a dedicated list of cold-storage notes, and Trash gives you a recovery surface for deleted notes without turning the left rail into a second browser.'
   },
   {
     title: 'The Tasks calendar schedules and reschedules',
@@ -685,7 +690,7 @@ export const HELP_SETTINGS: HelpSettingsSection[] = [
   {
     title: 'Appearance',
     items: [
-      { label: 'Theme, mode, and variant', detail: 'Pick a theme family — Apple, Gruvbox, Catppuccin, GitHub, Solarized, One, Nord, Tokyo Night, or the monochrome, true-black (OLED-friendly) Black Metal — plus light or dark mode and the active flavor or contrast where the theme supports it.' },
+      { label: 'Theme, mode, and variant', detail: 'Pick a theme family — Apple, Gruvbox, Catppuccin, GitHub, Solarized, One, Nord, Tokyo Night, Kanagawa (Wave / Dragon / Lotus), or the monochrome, true-black (OLED-friendly) Black Metal — plus light or dark mode and the active flavor or contrast where the theme supports it.' },
       { label: 'Dark sidebar', detail: 'Tint the sidebar slightly darker than the canvas so the chrome reads as a distinct surface.' },
       { label: 'Sidebar arrows', detail: 'Show or hide disclosure arrows for collapsible sidebar folders and sections.' }
     ]
@@ -699,6 +704,7 @@ export const HELP_SETTINGS: HelpSettingsSection[] = [
       { label: 'Leader hint duration', detail: 'When behavior is Timed, control how long the which-key overlay stays visible and how long the pending leader sequence remains active after pressing the Leader key. This setting is only available in Vim mode.' },
       { label: 'Vault text search backend and binary paths', detail: 'Choose Auto, the built-in searcher, ripgrep, or fzf for vault-wide text search. Auto prefers system tools when they are installed and falls back cleanly when they are not, you can provide explicit binary paths for ripgrep or fzf if they are not on your PATH, and Settings now shows the resolved runtime backend that will actually be used.' },
       { label: 'Live preview', detail: 'Hide markdown syntax on lines you are not actively editing.' },
+      { label: 'Render tables in live preview', detail: 'Show Markdown tables as interactive WYSIWYG widgets (edit cells, drag, right-click/`m` menu). Turn it off to keep tables as plain markdown text so you can edit them with the keyboard and Vim motions like any other line. When widgets are on, Arrow keys (and h/j/k/l) navigate cells; Shift+V then Shift+J/Shift+K move whole lines in the raw source.' },
       { label: 'Note tabs', detail: 'Enable or disable tab-based editing and split-friendly note workflows.' },
       { label: 'Word wrap', detail: 'Wrap long lines to the editor width or let them scroll horizontally.' },
       { label: 'PDFs in edit mode', detail: 'Choose between compact PDF cards or full inline PDF embeds while writing.' },
@@ -713,7 +719,8 @@ export const HELP_SETTINGS: HelpSettingsSection[] = [
       { label: 'Font size and line height', detail: 'Tune reading density in the editor and preview.' },
       { label: 'Reading width and editor width', detail: 'Cap long lines so wide windows stay readable.' },
       { label: 'Content alignment', detail: 'Center note content in its column or left-align it to the pane edge.' },
-      { label: 'Line numbers', detail: 'Switch between off, absolute, and relative gutter numbering.' }
+      { label: 'Line numbers', detail: 'Switch between off, absolute, and relative gutter numbering.' },
+      { label: 'Line number position', detail: 'Keep the gutter next to the centered text or pin it to the editor edge.' }
     ]
   },
   {
@@ -759,7 +766,8 @@ export const HELP_SETTINGS: HelpSettingsSection[] = [
     items: [
       { label: 'App identity', detail: 'See the Zenvoy app icon, current version, and a short description of the app as a keyboard-first markdown workflow with Vim motions and plain local files.' },
       { label: 'Updates and releases', detail: 'Check for updates, download a newer build, install and relaunch, or jump straight to the latest GitHub release from inside the app.' },
-      { label: 'Website, community, and issue links', detail: 'The app now exposes direct links to the Zenvoy website, Discord, GitHub repository, and issue tracker so support paths stay discoverable.' }
+      { label: 'Website, community, and issue links', detail: 'The app now exposes direct links to the Zenvoy website, Discord, GitHub repository, and issue tracker so support paths stay discoverable.' },
+      { label: 'Configuration file', detail: 'Your preferences — theme, editor, Vim, keymaps, fonts, search backend, and more — are mirrored to a plain-text `config.toml` so you can sync them across machines with git, stow, or chezmoi. It lives at `$XDG_CONFIG_HOME/zenvoy/config.toml` (`~/.config/zenvoy/config.toml` on macOS and Linux, `%APPDATA%\\zenvoy\\config.toml` on Windows), or wherever `$ZENVOY_CONFIG_DIR` points. The file is self-documenting: every available setting is listed with its allowed values, and every keymap action is listed with its default binding (commented out — uncomment a line and edit it to remap), so you can discover and change anything without opening the app. Settings → About has Reveal and Copy-path buttons. Existing setups are written out automatically the first time you launch this version, and edits to the file — by hand or via a synced dotfile — apply live without a restart. Machine-specific layout (window size, pane widths, collapsed folders) stays local so the file does not churn.' },
     ]
   }
 ]

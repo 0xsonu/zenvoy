@@ -39,6 +39,7 @@ export const IPC = {
   VAULT_APPEND_NOTE: 'vault:append-note',
   VAULT_CREATE_NOTE: 'vault:create-note',
   VAULT_CREATE_EXCALIDRAW: 'vault:create-excalidraw',
+  VAULT_CONVERT_OBSIDIAN_EXCALIDRAW: 'vault:convert-obsidian-excalidraw',
   VAULT_RENAME_NOTE: 'vault:rename-note',
   VAULT_DELETE_NOTE: 'vault:delete-note',
   VAULT_MOVE_TO_TRASH: 'vault:move-to-trash',
@@ -115,7 +116,12 @@ export const IPC = {
   CLI_INSTALL: 'cli:install',
   CLI_UNINSTALL: 'cli:uninstall',
   RAYCAST_GET_STATUS: 'raycast:get-status',
-  RAYCAST_INSTALL: 'raycast:install'
+  RAYCAST_INSTALL: 'raycast:install',
+  CONFIG_GET_SYNC: 'config:get-sync',
+  CONFIG_SET: 'config:set',
+  CONFIG_GET_PATH: 'config:get-path',
+  CONFIG_REVEAL: 'config:reveal',
+  CONFIG_ON_CHANGE: 'config:on-change'
 } as const
 
 export interface TikzRenderResponse {

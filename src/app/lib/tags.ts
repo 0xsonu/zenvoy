@@ -25,3 +25,19 @@ export function extractTags(body: string): string[] {
   }
   return [...seen]
 }
+
+/**
+ * Does a note's tags satisfy the Tags-view selection? `all` = the note carries
+ * every selected tag (AND, the narrowing default, #221); `any` = it carries at
+ * least one (OR). Case-insensitive. No selection → no match.
+ */
+export function matchesSelectedTags(
+  noteTags: readonly string[],
+  selectedTags: readonly string[],
+  mode: 'all' | 'any'
+): boolean {
+  if (selectedTags.length === 0) return false
+  const have = new Set(noteTags.map((t) => t.toLowerCase()))
+  const want = selectedTags.map((t) => t.toLowerCase())
+  return mode === 'any' ? want.some((t) => have.has(t)) : want.every((t) => have.has(t))
+}

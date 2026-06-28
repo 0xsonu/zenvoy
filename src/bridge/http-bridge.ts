@@ -1208,7 +1208,12 @@ export const httpBridge: ZenBridge = {
   raycastGetStatus,
   raycastInstall,
   clipboardWriteText,
-  clipboardReadText
+  clipboardReadText,
+  getConfigSync: () => null,
+  setConfig: async () => {},
+  getConfigPath: async () => null,
+  revealConfigFile: async () => {},
+  onConfigChange: () => () => {}
 }
 
 export function installBridge(): void {

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
-import { useStore } from './store'
+import { useStore, initConfigSync } from './store'
 import { resolveAuto } from './lib/themes'
 import { Sidebar } from './components/Sidebar'
 import { NoteList } from './components/NoteList'
@@ -269,6 +269,7 @@ function App(): JSX.Element {
   const previewMaxWidth = useStore((s) => s.previewMaxWidth)
   const editorMaxWidth = useStore((s) => s.editorMaxWidth)
   const contentAlign = useStore((s) => s.contentAlign)
+  const lineNumberPosition = useStore((s) => s.lineNumberPosition)
   const interfaceFont = useStore((s) => s.interfaceFont)
   const textFont = useStore((s) => s.textFont)
   const monoFont = useStore((s) => s.monoFont)
@@ -317,6 +318,12 @@ function App(): JSX.Element {
 
   useEffect(() => {
     window.zen.notifyRendererReady()
+  }, [])
+
+  // Mirror portable prefs to the plain-text config file and pick up external
+  // edits (synced dotfile / hand-edit). Desktop-only; a no-op on web.
+  useEffect(() => {
+    initConfigSync()
   }, [])
 
   // Drag a markdown file from the OS onto the window to open it. Desktop
@@ -422,6 +429,7 @@ function App(): JSX.Element {
     html.style.setProperty('--z-preview-max-width', `${previewMaxWidth}px`)
     html.style.setProperty('--z-editor-max-width', `${editorMaxWidth}px`)
     html.dataset.contentAlign = contentAlign
+    html.dataset.lineNumberPosition = lineNumberPosition
 
     const setFont = (name: string, value: string | null, fallback: string): void => {
       if (value) html.style.setProperty(name, `"${value}", ${fallback}`)
@@ -442,7 +450,7 @@ function App(): JSX.Element {
       monoFont,
       '"SF Mono", "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace'
     )
-  }, [editorFontSize, editorLineHeight, previewMaxWidth, editorMaxWidth, contentAlign, interfaceFont, textFont, monoFont])
+  }, [editorFontSize, editorLineHeight, previewMaxWidth, editorMaxWidth, contentAlign, lineNumberPosition, interfaceFont, textFont, monoFont])
 
   // The app now always runs fully opaque.
   useEffect(() => {

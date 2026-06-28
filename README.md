@@ -145,10 +145,14 @@ The editor stack is CodeMirror 6 with a Markdown-oriented workflow:
 - live preview behavior in the editor
 - heading folding
 - outline extraction and jumps
-- configurable line numbers and line-height
+- configurable line numbers and line-height (position: next to text or editor edge)
 - syntax highlighting for fenced code blocks
 - wiki links, callouts, tables, footnotes, and local embeds
+- ==highlight== syntax with multi-color highlighter (8 colors, right-click menu)
 - Vim block cursor and keyboard navigation
+- per-note undo history (Cmd+Z never crosses note boundaries)
+- /slash-command autocomplete in the editor and quick capture
+- WYSIWYG table navigation keys are remappable
 
 Preview and split mode support:
 
@@ -164,11 +168,12 @@ Preview and split mode support:
 
 - note search by title and path
 - vault-wide text search
-- tags view
-- tasks view
+- tags view (combine with AND/OR, match all/any toggle)
+- tasks view (customizable label, reorder via Shift+J/K or drag, @waiting tasks show on calendar)
 - archive view
 - trash view
 - quick notes view
+- home view (landing page with greeting, quick-create, recent notes, and today's tasks)
 - built-in help/manual
 
 ### Obsidian-friendly vault support
@@ -176,6 +181,8 @@ Preview and split mode support:
 - primary notes can live at the vault root instead of requiring `inbox/`
 - loose files anywhere in the vault are surfaced as files/assets
 - embedded files like `![[image.png]]` resolve like Obsidian
+- CSV databases are linkable via [[wikilinks]]
+- Obsidian Excalidraw drawings can be imported to native `.excalidraw` format
 - legacy `attachements/` and `_assets/` folders are recognized
 
 ### Files and local assets
@@ -184,10 +191,13 @@ Preview and split mode support:
 - images, SVGs, videos, audio, PDFs open inside Zenvoy tabs
 - watcher updates include non-Markdown file changes
 - sidebar multi-select with Cmd/Ctrl-click and Shift-click
+- virtualized note list for large vaults (5000+ notes)
+- manual drag-to-reorder note ordering
+- vault-root notice dismissable per vault
 
 ### Themes, fonts, and customization
 
-- theme families and light/dark/auto modes
+- theme families and light/dark/auto modes (includes Kanagawa Wave/Dragon/Lotus)
 - interface, text, and monospace font selection
 - editor font size and line-height controls
 - preview and editor width controls
@@ -196,6 +206,8 @@ Preview and split mode support:
 - search backend selection
 - vault layout and daily notes settings
 - system-folder display labels
+- portable config file (`config.toml`) — sync prefs across machines with git/stow/chezmoi
+- grouped settings rail with sub-tabbed pages
 
 ## Architecture
 

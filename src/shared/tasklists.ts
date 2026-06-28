@@ -55,6 +55,62 @@ function editTaskAtIndex(
   return markdown
 }
 
+/** Line numbers (0-based) of every task line, indexed by task index. Counts
+ *  exactly like `editTaskAtIndex` / `parseTasksFromBody` (fence-aware) so the
+ *  positions line up with a `VaultTask.taskIndex`. */
+function taskLineNumbers(lines: string[]): number[] {
+  const out: number[] = []
+  let inFence = false
+  let fenceMarker: string | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const fenceMatch = line.match(FENCE_RE)
+    if (fenceMatch) {
+      const marker = fenceMatch[2]
+      if (!inFence) {
+        inFence = true
+        fenceMarker = marker
+      } else if (marker === fenceMarker) {
+        inFence = false
+        fenceMarker = null
+      }
+      continue
+    }
+    if (inFence) continue
+    if (TASK_LINE_RE.test(line)) out.push(i)
+  }
+  return out
+}
+
+/**
+ * Relocate the task line at `fromTaskIndex` to just before/after the task line
+ * at `targetTaskIndex`, moving the whole markdown line. Used to reorder tasks
+ * from the Tasks list (the note's line order is the source of truth). Returns
+ * the markdown unchanged if either index is out of range or it's a no-op.
+ */
+export function moveTaskLine(
+  markdown: string,
+  fromTaskIndex: number,
+  targetTaskIndex: number,
+  position: 'before' | 'after'
+): string {
+  if (fromTaskIndex < 0 || targetTaskIndex < 0 || fromTaskIndex === targetTaskIndex) {
+    return markdown
+  }
+  const lines = markdown.split('\n')
+  const taskLines = taskLineNumbers(lines)
+  const fromLine = taskLines[fromTaskIndex]
+  const targetLine = taskLines[targetTaskIndex]
+  if (fromLine == null || targetLine == null) return markdown
+
+  const [content] = lines.splice(fromLine, 1)
+  // Removing the source line shifts every later index down by one.
+  const shiftedTarget = fromLine < targetLine ? targetLine - 1 : targetLine
+  const insertAt = position === 'before' ? shiftedTarget : shiftedTarget + 1
+  lines.splice(insertAt, 0, content)
+  return lines.join('\n')
+}
+
 export function toggleTaskAtIndex(
   markdown: string,
   taskIndex: number,

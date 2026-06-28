@@ -706,6 +706,7 @@ impl Vault {
         let tags = parse::extract_tags(&body);
         let wikilinks = parse::extract_wikilinks(&body);
         let has_attachments = parse::body_has_local_asset(&body);
+        let asset_embeds = parse::extract_asset_embeds(&body);
         let excerpt = parse::build_excerpt(&body);
         let size = fs_meta.len() as i64;
 
@@ -746,6 +747,7 @@ impl Vault {
             wikilinks,
             has_attachments,
             excerpt,
+            asset_embeds,
         };
 
         {
@@ -1186,9 +1188,21 @@ impl Vault {
             let dest = if ext.is_empty() {
                 unique_path(&dest_dir, &stem, "bin")
             } else {
-                unique_path(&dest_dir, &stem, &ext)
+                let candidate = dest_dir.join(format!("{}.{}", stem, ext));
+                if candidate.exists()
+                    && fs::metadata(&candidate).map(|m| m.len()).unwrap_or(0) == m.len()
+                {
+                    // Same name and size — reuse existing asset
+                    candidate
+                } else if candidate.exists() {
+                    unique_path(&dest_dir, &stem, &ext)
+                } else {
+                    candidate
+                }
             };
-            fs::copy(src_path, &dest)?;
+            if !dest.exists() {
+                fs::copy(src_path, &dest)?;
+            }
             let dest_name = dest.file_name().unwrap().to_string_lossy().to_string();
             let kind = kind_for_ext(&ext);
             let rel_str = if note_subfolder.is_empty() {

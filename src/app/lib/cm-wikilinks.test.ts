@@ -57,6 +57,10 @@ const storeState = vi.hoisted(() => ({
       updatedAt: 1
     }
   ],
+  folders: [
+    { folder: 'inbox' as const, subpath: 'Projects.base', siblingOrder: 0 },
+    { folder: 'inbox' as const, subpath: 'demo', siblingOrder: 1 }
+  ],
   vaultSettings: {
     primaryNotesLocation: 'root' as const,
     dailyNotes: { enabled: false, directory: 'Daily Notes' },
@@ -83,6 +87,28 @@ describe('wikilinkSource', () => {
     expect(result?.options.map((option) => option.label)).toEqual(
       expect.arrayContaining(['Zen Garden', 'zenvoy logo.png'])
     )
+  })
+
+  it('offers CSV databases as wikilink completions (#238)', () => {
+    const result = completionResult('[[Proj')
+    const db = result?.options.find((option) => option.label === 'Projects')
+    expect(db).toBeTruthy()
+    expect(db?.detail).toBe('DATABASE')
+  })
+
+  it('inserts a database link as a plain wikilink, not an embed (#238)', () => {
+    const parent = document.createElement('div')
+    document.body.append(parent)
+    const view = new EditorView({ parent, state: EditorState.create({ doc: '[[Proj' }) })
+    const result = wikilinkSource(new CompletionContext(view.state, view.state.doc.length, true))
+    const option = result?.options.find((candidate) => candidate.label === 'Projects')
+    const apply = option?.apply
+    if (typeof apply !== 'function') throw new Error('Expected a function completion apply handler')
+    apply(view, option!, result!.from, view.state.doc.length)
+
+    expect(view.state.doc.toString()).toBe('[[Projects]]')
+    view.destroy()
+    parent.remove()
   })
 
   it('inserts selected image assets as embeds', () => {
