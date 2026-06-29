@@ -320,7 +320,9 @@ impl Vault {
                     continue;
                 }
                 self.walk_dir(&path, folder, false, dir_indices, out)?;
-            } else if name.to_lowercase().ends_with(".md") {
+            } else if name.to_lowercase().ends_with(".md")
+                || name.to_lowercase().ends_with(".excalidraw")
+            {
                 let idx = dir_indices.entry(dir.to_path_buf()).or_insert(0);
                 let sibling_order = *idx;
                 *idx += 1;
@@ -403,7 +405,11 @@ impl Vault {
             stem
         };
         let dir = abs.parent().unwrap();
-        let dest = unique_path(dir, &stem, "md");
+        let ext = abs
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_else(|| "md".to_string());
+        let dest = unique_path(dir, &stem, &ext);
         fs::rename(&abs, &dest)?;
         self.invalidate_caches();
         let folder = self.folder_of(&dest);
