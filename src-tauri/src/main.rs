@@ -118,6 +118,8 @@ fn main() {
             commands::logout_server_session,
             commands::render_tikz,
             commands::export_note_pdf,
+            commands::get_config_path,
+            commands::reveal_config_file,
             commands::get_app_update_state,
             commands::check_for_app_updates,
             commands::check_for_app_updates_with_ui,

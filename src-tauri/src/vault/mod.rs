@@ -1497,11 +1497,7 @@ impl Vault {
         Ok(result)
     }
 
-    fn walk_databases(
-        &self,
-        dir: &Path,
-        out: &mut Vec<DatabaseSummary>,
-    ) -> VaultResult<()> {
+    fn walk_databases(&self, dir: &Path, out: &mut Vec<DatabaseSummary>) -> VaultResult<()> {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return Ok(()),
