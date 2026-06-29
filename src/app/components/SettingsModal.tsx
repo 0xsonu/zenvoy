@@ -471,13 +471,6 @@ export function SettingsModal(): JSX.Element {
   const showSidebarChevrons = useStore((s) => s.showSidebarChevrons)
   const setShowSidebarChevrons = useStore((s) => s.setShowSidebarChevrons)
   const appUpdateState = useAppUpdateState()
-  const [currentReleaseNotes, setCurrentReleaseNotes] = useState<string | null>(null)
-  useEffect(() => {
-    fetch(`https://api.github.com/repos/0xsonu/zenvoy/releases/tags/v${appInfo.version}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => { if (data?.body) setCurrentReleaseNotes(data.body) })
-      .catch(() => {})
-  }, [appInfo.version])
   const [editingRemoteProfile, setEditingRemoteProfile] = useState<{
     mode: 'create' | 'edit'
     value?: RemoteWorkspaceProfileInput
@@ -530,7 +523,12 @@ export function SettingsModal(): JSX.Element {
   const triggerUpdateCheck = useCallback(() => {
     void window.zen.checkForAppUpdates().then(
       (state) => {
-        if (state.phase === 'available') return
+        if (state.phase === 'available') {
+          window.alert(
+            `Zenvoy ${state.availableVersion ?? ''} is available. Use "Download Update" to fetch it.`
+          )
+          return
+        }
         if (state.phase === 'not-available') {
           window.alert(state.message)
           return
@@ -607,8 +605,8 @@ export function SettingsModal(): JSX.Element {
   )
 
   const displayedReleaseNotes = useMemo(
-    () => formatReleaseNotesForDisplay(appUpdateState?.releaseNotes ?? currentReleaseNotes),
-    [appUpdateState?.releaseNotes, currentReleaseNotes]
+    () => formatReleaseNotesForDisplay(appUpdateState?.releaseNotes ?? null),
+    [appUpdateState?.releaseNotes]
   )
 
   // Family list — Apple is the default, followed by the other families.
@@ -2640,6 +2638,14 @@ export function SettingsModal(): JSX.Element {
                         Check for Updates
                       </button>
                     )}
+                    <a
+                      href={appInfo.homepage ?? 'https://github.com/0xsonu/zenvoy/releases/latest'}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-xl border border-paper-300/70 bg-paper-100/80 px-3.5 py-2 text-xs font-medium text-ink-700 transition-colors hover:bg-paper-200"
+                    >
+                      View Release
+                    </a>
                   </div>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-ink-600">
@@ -2667,9 +2673,9 @@ export function SettingsModal(): JSX.Element {
                   </div>
                 )}
                 {displayedReleaseNotes && (
-                  <details className="mt-3 rounded-xl border border-paper-300/60 bg-paper-100/60 px-3 py-2.5" open={!!appUpdateState?.releaseNotes}>
+                  <details className="mt-3 rounded-xl border border-paper-300/60 bg-paper-100/60 px-3 py-2.5">
                     <summary className="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-ink-500">
-                      {appUpdateState?.releaseNotes ? `What's new in v${appUpdateState.availableVersion}` : `Release notes — v${appInfo.version}`}
+                      Release notes
                     </summary>
                     <pre className="mt-2 whitespace-pre-wrap font-sans text-sm leading-6 text-ink-600">
                       {displayedReleaseNotes}
