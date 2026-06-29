@@ -298,8 +298,8 @@ export function createTauriBridge(): ZenBridge {
     clipboardReadText: () => '',
     getConfigSync: () => null,
     setConfig: async () => {},
-    getConfigPath: async () => null,
-    revealConfigFile: async () => {},
+    getConfigPath: () => invoke<string | null>('get_config_path'),
+    revealConfigFile: () => invoke<void>('reveal_config_file'),
     onConfigChange: () => () => {},
   }
 }

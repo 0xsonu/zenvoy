@@ -1,6 +1,6 @@
 {
   "productName": "Zenvoy",
-  "version": "1.0.0",
+  "version": "0.1.5",
   "identifier": "org.zenvoy.notes",
   "build": {
     "beforeDevCommand": "npm run dev",

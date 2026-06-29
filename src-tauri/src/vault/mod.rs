@@ -510,7 +510,7 @@ impl Vault {
         let parent = form_dir
             .parent()
             .ok_or_else(|| VaultError::NotFound(csv_path.to_string()))?;
-        let new_dir_name = format!("{}.form", safe_name);
+        let new_dir_name = format!("{}.base", safe_name);
         let new_dir = unique_path_dir(parent, &new_dir_name);
         fs::rename(form_dir, &new_dir)?;
         let csv_name = csv_abs.file_name().unwrap().to_string_lossy().to_string();
@@ -848,7 +848,10 @@ impl Vault {
                 subpath,
                 sibling_order: 0,
             });
-            self.walk_folders(base, &path, folder, false, out)?;
+            // Don't descend into .base database folders
+            if !name.ends_with(".base") {
+                self.walk_folders(base, &path, folder, false, out)?;
+            }
         }
         Ok(())
     }
@@ -1348,18 +1351,10 @@ impl Vault {
         if !abs.is_file() {
             return Err(VaultError::NotFound(rel.to_string()));
         }
-        let sidecar_path = PathBuf::from(format!("{}.base.json", abs.display()));
-        let sidecar = if sidecar_path.is_file() {
-            serde_json::from_str(&fs::read_to_string(&sidecar_path)?)?
-        } else {
-            self.infer_sidecar_from_csv(&abs)?
-        };
+        let sidecar = self.read_database_sidecar(&abs)?;
         let rows = self.read_csv_rows(&abs)?;
-        let title = abs
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+        // Title: .base format → folder name minus .base; legacy → csv stem
+        let title = self.database_title_from_path(&abs);
         Ok(DatabaseDoc {
             sidecar,
             path: rel.to_string(),
@@ -1370,12 +1365,7 @@ impl Vault {
 
     pub fn write_database_rows(&self, rel: &str, rows: Vec<DbRow>) -> VaultResult<DatabaseDoc> {
         let abs = safepath::safe_join(&self.root, rel)?;
-        let sidecar_path = PathBuf::from(format!("{}.base.json", abs.display()));
-        let sidecar: DatabaseSidecar = if sidecar_path.is_file() {
-            serde_json::from_str(&fs::read_to_string(&sidecar_path)?)?
-        } else {
-            self.infer_sidecar_from_csv(&abs)?
-        };
+        let sidecar = self.read_database_sidecar(&abs)?;
         self.write_csv_rows(&abs, &sidecar, &rows)?;
         self.open_database(rel)
     }
@@ -1387,8 +1377,8 @@ impl Vault {
         rows: Vec<DbRow>,
     ) -> VaultResult<DatabaseDoc> {
         let abs = safepath::safe_join(&self.root, rel)?;
-        let sidecar_path = PathBuf::from(format!("{}.base.json", abs.display()));
-        fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)?;
+        let schema_path = self.resolve_schema_path(&abs);
+        fs::write(&schema_path, serde_json::to_string_pretty(&sidecar)?)?;
         self.write_csv_rows(&abs, &sidecar, &rows)?;
         self.open_database(rel)
     }
@@ -1399,29 +1389,59 @@ impl Vault {
         subpath: &str,
         title: Option<&str>,
     ) -> VaultResult<DatabaseDoc> {
-        let stem = title.map(sanitize_file_stem).unwrap_or_else(default_title);
-        let stem = if stem.is_empty() {
-            default_title()
-        } else {
-            stem
-        };
+        let safe_title = title
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .unwrap_or("Untitled Database");
+        let base_name: String = safe_title
+            .chars()
+            .map(|c| if "\\/:*?\"<>|".contains(c) { '-' } else { c })
+            .collect();
         let base = self.folder_root(folder)?;
         let dir = if subpath.is_empty() {
-            base
+            base.clone()
         } else {
             base.join(subpath)
         };
         fs::create_dir_all(&dir)?;
-        let csv_path = unique_path(&dir, &stem, "csv");
-        let sidecar_path = PathBuf::from(format!("{}.base.json", csv_path.display()));
 
-        let headers = vec!["id".to_string(), "Title".to_string(), "Status".to_string()];
-        let sidecar = self.default_sidecar(&headers);
-        fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)?;
+        // Resolve non-colliding <Name>.base folder
+        let form_dir = unique_path_dir(&dir, &format!("{}.base", base_name));
+        fs::create_dir_all(&form_dir)?;
 
-        // Write empty CSV with just headers
+        let csv_path = form_dir.join("data.csv");
+        let schema_path = form_dir.join("schema.json");
+
+        // Build sidecar with proper fields (id hidden + Name visible)
+        let id_field_id = uuid::Uuid::new_v4().to_string();
+        let name_field_id = uuid::Uuid::new_v4().to_string();
+        let view_id = uuid::Uuid::new_v4().to_string();
+        let fields = vec![
+            serde_json::json!({ "id": id_field_id, "name": "id", "type": "text", "hidden": true }),
+            serde_json::json!({ "id": name_field_id, "name": "Name", "type": "text" }),
+        ];
+        let views = vec![serde_json::json!({
+            "id": view_id,
+            "name": "Table",
+            "type": "table",
+            "filters": [],
+            "sorts": [],
+            "columnOrder": [&id_field_id, &name_field_id],
+            "hiddenFieldIds": [&id_field_id]
+        })];
+        let sidecar = DatabaseSidecar {
+            version: 1,
+            id_field_id: id_field_id.clone(),
+            fields,
+            views,
+            active_view_id: view_id,
+            pages: None,
+        };
+        fs::write(&schema_path, serde_json::to_string_pretty(&sidecar)?)?;
+
+        // Write empty CSV with headers
         let mut wtr = csv::Writer::from_path(&csv_path)?;
-        wtr.write_record(&headers)?;
+        wtr.write_record(["id", "Name"])?;
         wtr.flush()?;
 
         let rel = csv_path
@@ -1431,15 +1451,10 @@ impl Vault {
             .map(|c| c.as_os_str().to_string_lossy().to_string())
             .collect::<Vec<_>>()
             .join("/");
-        let title_str = csv_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
         Ok(DatabaseDoc {
             sidecar,
             path: rel,
-            title: title_str,
+            title: safe_title.to_string(),
             rows: vec![],
         })
     }
@@ -1451,20 +1466,19 @@ impl Vault {
         body: &str,
     ) -> VaultResult<String> {
         let abs = safepath::safe_join(&self.root, csv_path)?;
-        let db_name = abs
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let dir = abs.parent().unwrap().join(&db_name);
-        fs::create_dir_all(&dir)?;
+        // Pages go in the .base folder (parent of data.csv)
+        let form_dir = abs
+            .parent()
+            .ok_or_else(|| VaultError::NotFound(csv_path.to_string()))?;
+        let pages_dir = form_dir.to_path_buf();
+        fs::create_dir_all(&pages_dir)?;
         let stem = sanitize_file_stem(title);
         let stem = if stem.is_empty() {
             default_title()
         } else {
             stem
         };
-        let dest = unique_path(&dir, &stem, "md");
+        let dest = unique_path(&pages_dir, &stem, "md");
         fs::write(&dest, body)?;
         let rel = dest
             .strip_prefix(&self.root)
@@ -1477,34 +1491,50 @@ impl Vault {
     }
 
     pub fn list_databases(&self) -> VaultResult<Vec<DatabaseSummary>> {
-        let folders = [NoteFolder::Inbox, NoteFolder::Quick, NoteFolder::Archive];
         let mut result = Vec::new();
-        for folder in &folders {
-            let base = self.folder_root(folder)?;
-            if !base.is_dir() {
-                continue;
-            }
-            self.walk_csv(&base, folder, &mut result)?;
-        }
+        self.walk_databases(&self.root, &mut result)?;
+        result.sort_by(|a, b| a.title.cmp(&b.title));
         Ok(result)
     }
 
-    fn walk_csv(
-        &self,
-        dir: &Path,
-        folder: &NoteFolder,
-        out: &mut Vec<DatabaseSummary>,
-    ) -> VaultResult<()> {
+    fn walk_databases(&self, dir: &Path, out: &mut Vec<DatabaseSummary>) -> VaultResult<()> {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return Ok(()),
         };
         for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "trash" || name == "node_modules" {
+                continue;
+            }
             let path = entry.path();
             if path.is_dir() {
-                self.walk_csv(&path, folder, out)?;
-            } else if path.extension().map(|e| e == "csv").unwrap_or(false) {
-                let row_count = self.count_csv_rows(&path);
+                if name.ends_with(".base") {
+                    // Database folder — surface as its data.csv path
+                    let csv = path.join("data.csv");
+                    if csv.is_file() {
+                        let rel = csv
+                            .strip_prefix(&self.root)
+                            .unwrap()
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy().to_string())
+                            .collect::<Vec<_>>()
+                            .join("/");
+                        let title = name.strip_suffix(".base").unwrap_or(&name).to_string();
+                        out.push(DatabaseSummary {
+                            path: rel,
+                            title,
+                            folder: self.folder_of(&path),
+                            row_count: self.count_csv_rows(&csv),
+                        });
+                    }
+                } else {
+                    self.walk_databases(&path, out)?;
+                }
+            } else if name.to_lowercase().ends_with(".csv")
+                && !name.to_lowercase().ends_with(".base.json")
+            {
+                // Legacy loose CSV
                 let rel = path
                     .strip_prefix(&self.root)
                     .unwrap()
@@ -1520,8 +1550,8 @@ impl Vault {
                 out.push(DatabaseSummary {
                     path: rel,
                     title,
-                    folder: folder.clone(),
-                    row_count,
+                    folder: self.folder_of(&path),
+                    row_count: self.count_csv_rows(&path),
                 });
             }
         }
@@ -1588,6 +1618,60 @@ impl Vault {
             names = vec!["id".to_string(), "Title".to_string(), "Status".to_string()];
         }
         names
+    }
+
+    /// Resolve the schema/sidecar path for a database CSV file.
+    /// New format: <parent>/schema.json (when parent is a .base dir)
+    /// Legacy: <csv>.base.json
+    fn resolve_schema_path(&self, csv_abs: &Path) -> PathBuf {
+        if let Some(parent) = csv_abs.parent() {
+            let schema = parent.join("schema.json");
+            if schema.is_file() {
+                return schema;
+            }
+            // Check if parent is a .base dir (new format without existing schema yet)
+            if let Some(dir_name) = parent.file_name() {
+                if dir_name.to_string_lossy().ends_with(".base") {
+                    return schema;
+                }
+            }
+        }
+        PathBuf::from(format!("{}.base.json", csv_abs.display()))
+    }
+
+    /// Read the sidecar for a database, trying new format then legacy then infer.
+    fn read_database_sidecar(&self, csv_abs: &Path) -> VaultResult<DatabaseSidecar> {
+        // Try new format: <parent>/schema.json
+        if let Some(parent) = csv_abs.parent() {
+            let schema = parent.join("schema.json");
+            if schema.is_file() {
+                return Ok(serde_json::from_str(&fs::read_to_string(&schema)?)?);
+            }
+        }
+        // Try legacy: <csv>.base.json
+        let legacy = PathBuf::from(format!("{}.base.json", csv_abs.display()));
+        if legacy.is_file() {
+            return Ok(serde_json::from_str(&fs::read_to_string(&legacy)?)?);
+        }
+        // Infer from CSV headers
+        self.infer_sidecar_from_csv(csv_abs)
+    }
+
+    /// Get database title from path: .base folder name minus suffix, or CSV stem
+    fn database_title_from_path(&self, csv_abs: &Path) -> String {
+        if let Some(parent) = csv_abs.parent() {
+            if let Some(dir_name) = parent.file_name() {
+                let name = dir_name.to_string_lossy();
+                if name.ends_with(".base") {
+                    return name.strip_suffix(".base").unwrap_or(&name).to_string();
+                }
+            }
+        }
+        csv_abs
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
     }
 
     fn infer_sidecar_from_csv(&self, abs: &Path) -> VaultResult<DatabaseSidecar> {
@@ -1727,14 +1811,34 @@ impl Vault {
     fn default_sidecar(&self, headers: &[String]) -> DatabaseSidecar {
         let fields: Vec<serde_json::Value> = headers
             .iter()
-            .map(|name| serde_json::json!({ "name": name, "type": "text", "id": name }))
+            .map(|name| {
+                let mut f = serde_json::json!({ "name": name, "type": "text", "id": name });
+                if name == "id" {
+                    f["hidden"] = serde_json::json!(true);
+                }
+                f
+            })
+            .collect();
+        let field_ids: Vec<&str> = headers.iter().map(|s| s.as_str()).collect();
+        let hidden: Vec<&str> = headers
+            .iter()
+            .filter(|h| *h == "id")
+            .map(|s| s.as_str())
             .collect();
         let view_id = "default-view".to_string();
         DatabaseSidecar {
             version: 1,
             id_field_id: "id".to_string(),
             fields,
-            views: vec![serde_json::json!({ "id": view_id, "type": "table" })],
+            views: vec![serde_json::json!({
+                "id": view_id,
+                "name": "Table",
+                "type": "table",
+                "filters": [],
+                "sorts": [],
+                "columnOrder": field_ids,
+                "hiddenFieldIds": hidden
+            })],
             active_view_id: view_id,
             pages: None,
         }

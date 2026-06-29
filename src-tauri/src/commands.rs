@@ -1,5 +1,6 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, State, WebviewWindow, Window};
 use tauri_plugin_updater::UpdaterExt;
@@ -1148,6 +1149,80 @@ pub async fn export_note_pdf(
     Ok(None)
 }
 
+// ─── Configuration File ──────────────────────────────────────────────────────
+
+fn config_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("ZENVOY_CONFIG_DIR") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir.trim());
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.trim().is_empty() {
+            return PathBuf::from(xdg.trim()).join("zenvoy");
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata).join("zenvoy");
+        }
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("zenvoy")
+}
+
+fn config_file_path() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
+#[tauri::command]
+pub fn get_config_path() -> Option<String> {
+    Some(config_file_path().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn reveal_config_file() -> Result<(), String> {
+    let path = config_file_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    // Create the file if it doesn't exist
+    if !path.exists() {
+        std::fs::write(
+            &path,
+            "# Zenvoy configuration\n# See https://github.com/0xsonu/zenvoy for documentation.\n",
+        )
+        .ok();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(&path))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // ─── Updater ──────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
@@ -1179,7 +1254,7 @@ impl AppUpdateState {
             transferred_bytes: None,
             total_bytes: None,
             bytes_per_second: None,
-            message: "Ready to check for updates.".into(),
+            message: "Check GitHub releases for a newer Zenvoy build.".into(),
         }
     }
 }
@@ -1193,36 +1268,85 @@ pub fn get_app_update_state() -> AppUpdateState {
     AppUpdateState::idle(&current_version())
 }
 
+async fn fetch_github_release_notes(version: &str) -> Option<String> {
+    let url = format!(
+        "https://api.github.com/repos/0xsonu/zenvoy/releases/tags/v{}",
+        version
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "zenvoy-updater")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    json.get("body")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
+}
+
 #[tauri::command]
 pub async fn check_for_app_updates(app: tauri::AppHandle) -> Result<AppUpdateState, String> {
+    // Emit "checking" state so the UI updates immediately
+    let checking = AppUpdateState {
+        phase: "checking".into(),
+        current_version: current_version(),
+        message: "Checking GitHub releases for updates…".into(),
+        ..AppUpdateState::idle(&current_version())
+    };
+    let _ = app.emit("app-update-state", &checking);
+
     let updater = app.updater().map_err(|e| e.to_string())?;
-    match updater.check().await {
-        Ok(Some(update)) => Ok(AppUpdateState {
-            phase: "available".into(),
-            current_version: current_version(),
-            available_version: Some(update.version.clone()),
-            release_name: Some(format!("Zenvoy v{}", update.version)),
-            release_date: update.date.map(|d| d.to_string()),
-            release_notes: update.body.clone(),
-            progress_percent: None,
-            transferred_bytes: None,
-            total_bytes: None,
-            bytes_per_second: None,
-            message: format!("Update v{} available.", update.version),
-        }),
-        Ok(None) => Ok(AppUpdateState {
+    let result = match updater.check().await {
+        Ok(Some(update)) => {
+            // Fetch release notes from GitHub API if updater doesn't provide them
+            let notes = if update
+                .body
+                .as_ref()
+                .map(|b| b.trim().is_empty())
+                .unwrap_or(true)
+            {
+                fetch_github_release_notes(&update.version).await
+            } else {
+                update.body.clone()
+            };
+            AppUpdateState {
+                phase: "available".into(),
+                current_version: current_version(),
+                available_version: Some(update.version.clone()),
+                release_name: Some(format!("Zenvoy v{}", update.version)),
+                release_date: update.date.map(|d| d.to_string()),
+                release_notes: notes,
+                progress_percent: None,
+                transferred_bytes: None,
+                total_bytes: None,
+                bytes_per_second: None,
+                message: format!(
+                    "Zenvoy {} is available. Download it from inside the app.",
+                    update.version
+                ),
+            }
+        }
+        Ok(None) => AppUpdateState {
             phase: "not-available".into(),
             current_version: current_version(),
-            message: "You're on the latest version.".into(),
+            message: format!("You're already on Zenvoy {}.", current_version()),
             ..AppUpdateState::idle(&current_version())
-        }),
-        Err(e) => Ok(AppUpdateState {
+        },
+        Err(e) => AppUpdateState {
             phase: "error".into(),
             current_version: current_version(),
             message: format!("Update check failed: {e}"),
             ..AppUpdateState::idle(&current_version())
-        }),
-    }
+        },
+    };
+    let _ = app.emit("app-update-state", &result);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1276,7 +1400,7 @@ pub async fn download_app_update(app: tauri::AppHandle) -> Result<AppUpdateState
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(AppUpdateState {
+    let result = AppUpdateState {
         phase: "downloaded".into(),
         current_version: current_version(),
         available_version: Some(update.version.clone()),
@@ -1287,8 +1411,13 @@ pub async fn download_app_update(app: tauri::AppHandle) -> Result<AppUpdateState
         transferred_bytes: None,
         total_bytes: None,
         bytes_per_second: None,
-        message: "Update downloaded. Restart to apply.".into(),
-    })
+        message: format!(
+            "Zenvoy {} is ready. Restart to install the update.",
+            update.version
+        ),
+    };
+    let _ = app.emit("app-update-state", &result);
+    Ok(result)
 }
 
 #[tauri::command]
