@@ -225,22 +225,26 @@ export function createTauriBridge(): ZenBridge {
       return paths.find(p => p.endsWith(name)) || paths.shift() || null
     },
     resolveLocalAssetUrl: (vaultRoot, notePath, href) => {
+      // Normalize vault root to forward slashes for consistent URL construction
+      const normalizedRoot = vaultRoot.replace(/\\/g, '/')
       // If href contains a path separator, resolve from vault root
       if (href.includes('/')) {
-        const absPath = `${vaultRoot}/${href}`
+        const absPath = `${normalizedRoot}/${href}`
         return (window as any).__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
       }
       // Otherwise resolve as filename: try attachements/<note-folder>/<filename> first, then attachements/<filename>
       const noteName = notePath.substring(notePath.lastIndexOf('/') + 1).replace(/\.md$/i, '')
       const noteFolder = noteName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
-      const noteSubPath = `${vaultRoot}/attachements/${noteFolder}/${href}`
-      const fallbackPath = `${vaultRoot}/attachements/${href}`
+      const noteSubPath = `${normalizedRoot}/attachements/${noteFolder}/${href}`
+      const fallbackPath = `${normalizedRoot}/attachements/${href}`
       // Try note-specific folder first, fall back to root attachements
       return (window as any).__TAURI_INTERNALS__.convertFileSrc(noteSubPath, 'asset')
         || (window as any).__TAURI_INTERNALS__.convertFileSrc(fallbackPath, 'asset')
     },
     resolveVaultAssetUrl: (vaultRoot, assetPath) => {
-      const absPath = `${vaultRoot}/${assetPath}`
+      // Normalize vault root to forward slashes for consistent URL construction
+      const normalizedRoot = vaultRoot.replace(/\\/g, '/')
+      const absPath = `${normalizedRoot}/${assetPath}`
       return (window as any).__TAURI_INTERNALS__.convertFileSrc(absPath, 'asset')
     },
 
