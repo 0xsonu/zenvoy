@@ -1,6 +1,6 @@
 [package]
 name = "zenvoy"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Zenvoy — keyboard-first Markdown notes app"
 license = "MIT"
